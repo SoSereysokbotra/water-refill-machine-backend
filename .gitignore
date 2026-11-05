@@ -16,3 +16,7 @@ docs/04-Backend-Cloud/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# ESP32 gateway
+esp32-gateway/include/secrets.h
+esp32-gateway/.pio/
