@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import express from 'express';
 import QRCode from 'qrcode';
 import { createPayWayClient, PayWayError } from './payway.js';
+import { startMqttBridge } from './mqtt.js';
 
 // ---------- config ----------
 const env = process.env;
@@ -74,7 +75,9 @@ function requireDeviceKey(req, res, next) {
   next();
 }
 
-app.get('/health', (_req, res) => res.json({ ok: true, mode: MODE }));
+app.get('/health', (_req, res) =>
+  res.json({ ok: true, mode: MODE, mqtt: mqttBridge ? (mqttBridge.connected ? 'connected' : 'disconnected') : 'disabled' }),
+);
 
 /**
  * Machine asks for a payment QR.
@@ -252,6 +255,8 @@ app.post('/dev/pay/:tranId', (req, res) => {
   }
   res.redirect('/dev');
 });
+
+const mqttBridge = startMqttBridge({ env, payments, createPayment, syncWithPayWay, publicView, prices: PRICES });
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Water Refill backend on http://0.0.0.0:${PORT}  (payment mode: ${MODE})`);
