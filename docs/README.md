@@ -11,7 +11,8 @@ A streamlined, production-focused documentation library for the **IoT Cashless W
 │
 ├── 📋 01-Project-Overview/
 │   ├── system-overview.md             ← Executive brief, architecture diagram, user flow, specs
-│   └── team-roles.md                  ← Engineering responsibilities & deliverables
+│   ├── team-roles.md                  ← Engineering responsibilities & deliverables
+│   └── product-architecture-roadmap.md ← STM32 + ESP32 + MQTT product architecture, stack & roadmap
 │
 ├── 🔧 02-Hardware-Design/
 │   ├── bill-of-materials.md           ← Complete 14-part BOM with specs, prices & suppliers
@@ -25,7 +26,9 @@ A streamlined, production-focused documentation library for the **IoT Cashless W
 │
 ├── 🌐 04-Cloud-and-Payment/
 │   ├── qr-payment-flow.md             ← Cashless QR payment lifecycle & timeouts
-│   └── api-and-database.md            ← REST API endpoints & PostgreSQL schema
+│   ├── api-and-database.md            ← REST API endpoints & PostgreSQL schema
+│   ├── stm32-qr-payment-integration.md ← STM32 ↔ backend QR payment guide
+│   └── backend-architecture.md        ← Modular monolith · DDD · Hexagonal · CQRS · Outbox
 │
 ├── 🏗️ 05-Mechanical-and-Plumbing/
 │   ├── enclosure-and-tank.md          ← Stainless 304 dimensions, layout & 60L tank
@@ -33,7 +36,8 @@ A streamlined, production-focused documentation library for the **IoT Cashless W
 │
 └── ✅ 06-Testing-and-Operations/
     ├── test-checklist.md              ← 12-point Quality Assurance field test checklist
-    └── operations-and-troubleshooting.md ← Refill SOP, maintenance schedule & troubleshooting
+    ├── operations-and-troubleshooting.md ← Refill SOP, maintenance schedule & troubleshooting
+    └── deployment.md                  ← Environments, CI/CD, zero-downtime, backups, security
 ```
 
 ---
