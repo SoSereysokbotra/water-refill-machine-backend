@@ -20,6 +20,13 @@
 
 Each environment has its **own** database, broker, ABA credentials and secrets. Staging can never reach production money or machines.
 
+**Production grows in two steps** (Implementation Plan Phases 3.5 and 9):
+
+| Step | When | Layout |
+|---|---|---|
+| **Minimal** (early pilot) | Phase 3.5, ≈ week 9 | 1 VPS (static IP), single process `RUN_MODE=all`, managed PostgreSQL, Redis, Caddy, EMQX `wrm-prod`, daily backup, Sentry; manual deploy script |
+| **Full** | Phase 9 | Layout below: api ×2 + worker, dashboard, CI/CD with approval, observability, staging environment |
+
 ---
 
 ## 2. Production infrastructure
@@ -48,8 +55,8 @@ Each environment has its **own** database, broker, ABA credentials and secrets. 
 | Component | Choice | Why |
 |---|---|---|
 | Server | 1 VPS, **4 GB RAM**, Singapore, **reserved static IP** | Low latency; static IP required by ABA |
-| Database | **Managed PostgreSQL** | Automatic backups, point-in-time recovery, patching |
-| Redis | Container with AOF persistence | Queues survive restarts |
+| Database | **Managed PostgreSQL** (plan with ≥ 25 connections) | Automatic backups, point-in-time recovery, patching. No PgBouncer at start: small Prisma pools (≈ 15 connections), migrations via `DIRECT_DATABASE_URL` (ADR-0011) |
+| Redis | Container with AOF persistence | Queues survive restarts; money timing lives in PostgreSQL (sweeps), so Redis loss only delays work |
 | Reverse proxy / HTTPS | **Caddy** | Automatic TLS certificates |
 | DNS / edge | **Cloudflare** | Free, DDoS protection |
 | Firmware storage (OTA) | **Cloudflare R2** (or S3) | Cheap, fast downloads for ESP32 |
@@ -66,8 +73,8 @@ Each environment has its **own** database, broker, ABA credentials and secrets. 
 | Service | Image | Replicas | Notes |
 |---|---|---|---|
 | `caddy` | caddy | 1 | Routes `api.*` → api, `dashboard.*` → dashboard |
-| `api` | `ghcr.io/<org>/wrm-api:<sha>` | 2 | HTTP + MQTT consumers (shared subscription) |
-| `worker` | same image as api, `main.worker.js` | 1–N | Outbox relay, ABA polling, schedules |
+| `api` | `ghcr.io/<org>/wrm-api:<sha>`, `RUN_MODE=api` | 2 | HTTP + MQTT consumers (shared subscription) |
+| `worker` | same image, `RUN_MODE=worker` | 1–N | Outbox relay, sweeps (payments, reconcile, dispensing, fleet), ABA checks, notifications |
 | `dashboard` | `ghcr.io/<org>/wrm-dashboard:<sha>` | 1 | Next.js |
 | `redis` | redis:7 | 1 | AOF on, not exposed publicly |
 | `otel-agent` | Grafana Alloy / OTel collector | 1 | Ships logs, metrics, traces |
@@ -88,7 +95,7 @@ Push / Pull Request
    ▼
 Merge to main
    ▼
-② Build Docker images (api, worker, dashboard), tag = git commit SHA
+② Build Docker images (api — also used as worker via RUN_MODE — and dashboard), tag = git commit SHA
    → push to GHCR
    ▼
 ③ Deploy to STAGING automatically
@@ -117,7 +124,9 @@ Merge to main
 | API restart | 2 API containers updated one at a time (rolling / blue-green); Caddy routes only to healthy instances |
 | MQTT during deploy | Shared subscriptions + QoS 1 + persistent sessions → no lost messages |
 | Workers | Graceful shutdown (finish current job); BullMQ retries anything unfinished |
-| Outbox | Unpublished rows stay in the table and are sent after restart |
+| Outbox | Undispatched rows stay in the table and are sent after restart |
+| Sweeps | Job schedulers are re-created at every worker boot; deadlines live in PostgreSQL, so a restart only delays one sweep interval |
+| Machines during deploy | ESP32 retries `pay/request` with the same `request_id`; outcomes stay in NVS until acknowledged |
 | DB migrations | **Expand → migrate → contract** (never a breaking schema change in one release) |
 | Health checks | `/health/live` (process) and `/health/ready` (DB, Redis, MQTT connected) |
 
@@ -139,7 +148,7 @@ Merge to main
 |---|---|
 | PostgreSQL | Managed daily backups + **point-in-time recovery (7 days)** + weekly logical export to R2 |
 | Before each production deploy | On-demand DB backup |
-| Redis | AOF; loss acceptable (jobs rebuilt from DB/outbox) |
+| Redis | AOF; loss acceptable — outbox rows are re-dispatched and all money deadlines are re-read from PostgreSQL by the sweeps (tested in Phase 1/9) |
 | Infrastructure | Compose files, Caddyfile, scripts in Git → server rebuildable from the repo |
 | **Restore drill** | Restore latest backup into staging **every month** |
 | Targets | **RPO ≤ 5 min**, **RTO ≤ 1 hour** |
@@ -171,7 +180,7 @@ Release firmware v1.2.0
 
 - ESP32: secure boot + flash encryption, signed images, version reported in heartbeats.
 - STM32: updated **by the ESP32** over UART (STM32 built-in bootloader).
-- OTA only when the machine is idle (never during a payment or dispense).
+- OTA only when the machine is idle: no open payment and `pending_outcomes = 0` (never during a payment or dispense).
 
 ---
 
@@ -182,9 +191,16 @@ Release firmware v1.2.0
 | API uptime | Down > 1 min |
 | Payment success rate | < 95 % over 15 min |
 | ABA errors / latency | Error spike or p95 > 5 s |
-| Outbox lag | Oldest unpublished event > 30 s |
+| Outbox lag | Oldest undispatched event > 30 s |
 | Queue depth | Growing for > 5 min |
+| Sweeps | A sweep has not completed for 3 × its interval |
+| ABA check failures | > 5 % of checks failing over 10 min |
+| Late payments | Any late payment detected (reconcile/callback) |
 | Machines offline | Any machine offline > 3 min |
+| Pending outcomes | A machine reports `pending_outcomes > 0` for > 1 h |
+| Dispense unknown | Any payment in DISPENSE_UNKNOWN |
+| Refund cases | Any case open > 24 h |
+| Rejected / dropped outcomes | Any `transaction/ack rejected` or device `dropped_outcomes` increase |
 | Host resources | CPU / memory / disk > 80 % |
 
 Alerts → **Telegram group** (team) + Grafana / Sentry dashboards.
@@ -209,8 +225,8 @@ Alerts → **Telegram group** (team) + Grafana / Sentry dashboards.
 
 | Stage | Machines | Deployment |
 |---|---|---|
-| Start | 1–100 | 1 VPS + managed PostgreSQL |
-| Growth | 100–1,000 | 2–3 VPS behind a load balancer, dedicated worker server, DB read replica |
+| Start | 1–100 | 1 VPS + managed PostgreSQL (no pooler) |
+| Growth | 100–1,000 | 2–3 VPS behind a load balancer, dedicated worker server, **PgBouncer / managed pooler**, DB read replica |
 | Scale | 1,000+ | Managed Kubernetes; extract busy contexts into services |
 
 The architecture (stateless API, outbox, shared subscriptions) supports each step without a rewrite.
@@ -246,8 +262,9 @@ infra/
 - [ ] CI/CD green; staging deploy + manual production approval tested
 - [ ] Monitoring dashboards + Telegram alerts tested
 - [ ] Rollback tested (deploy a previous image)
-- [ ] Refund flow tested end to end
-- [ ] Pilot machine runs 7 days without incident
+- [ ] Refund flow tested end to end (claim → refund in ABA portal → mark refunded)
+- [ ] Redis loss and callback loss tested in staging (sweeps and reconcile recover)
+- [ ] Early pilot ran ≥ 8 weeks; pilot report reviewed (uptime ≥ 98 %, refund cases, unknown outcomes, accuracy)
 
 ---
 

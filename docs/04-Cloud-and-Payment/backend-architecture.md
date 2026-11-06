@@ -81,8 +81,8 @@
 |---|---|---|---|
 | **Payments** | Core | Full DDD | Payment aggregate, refunds, KHQR, ABA integration |
 | **Dispensing** | Core | Full DDD | Dispense aggregate, accuracy check (flow vs weight) |
-| **Fleet** | Supporting | DDD-light | Machines, prices, config, firmware versions, online status |
-| **Monitoring** | Supporting | DDD-light | Alert rules, incidents, notifications |
+| **Fleet** | Supporting | 2-layer module (service + interface) | Machines, prices, config, firmware versions, online status |
+| **Monitoring** | Supporting | 2-layer module (service + interface) | Alert rules, incidents, notifications |
 | **Identity** | Generic | Library (Better Auth) + RBAC | Users, roles, sessions |
 | **Reporting** | Generic | CQRS read side only | Sales views, dashboards, exports |
 
@@ -102,12 +102,12 @@ payments/
 ├── domain/                     ← pure TypeScript: no NestJS, no Prisma, no MQTT
 │   ├── payment.aggregate.ts       Payment + state machine + invariants
 │   ├── value-objects/             Money, TranId, Volume, MachineId
-│   ├── events/                    PaymentCreated, PaymentPaid, PaymentExpired, RefundRequested
+│   ├── events/                    PaymentCreated, PaymentPaid, PaymentExpired, RefundReviewOpened, …
 │   ├── errors.ts                  DomainError types
 │   └── ports/                     PaymentRepository, PaymentGateway (interfaces)
-├── application/                ← use cases (orchestration, transactions)
-│   ├── commands/                  CreatePayment, ConfirmPayment, ExpirePayment, RequestRefund
-│   └── queries/                   GetPaymentStatus
+├── application/                ← use cases (orchestration, transactions, sweeps)
+│   ├── commands/                  CreatePayment, ConfirmPayment, ExpirePayment, CancelPayment, ProbePayment
+│   └── queries/                   GetPayment
 ├── infrastructure/             ← adapters to the outside world
 │   ├── prisma-payment.repository.ts
 │   └── payway/                    ABA PayWay adapter (signing, generate-qr, check-transaction, refund)
@@ -117,11 +117,11 @@ payments/
     └── jobs/check-aba.processor.ts
 ```
 
-**Dependency rule:** `interface → application → domain ← infrastructure`. The domain depends on nothing; infrastructure implements domain ports.
+**Dependency rule:** `interface → application → domain ← infrastructure`. The domain depends only on the `shared-kernel` (base classes, `Money`, `Clock`); infrastructure implements domain ports. Supporting contexts (Fleet, Monitoring, Identity, Reporting) use two layers — see Implementation Plan §B2.
 
 | Layer | May depend on | Contains |
 |---|---|---|
-| `domain` | nothing | Aggregates, value objects, domain events, port interfaces |
+| `domain` | `shared-kernel` only | Aggregates, value objects, domain events, port interfaces |
 | `application` | `domain` | Command/query handlers, transactions, publishing events to the outbox |
 | `infrastructure` | `domain`, `application` | Prisma, PayWay HTTP client, MQTT publisher |
 | `interface` | `application` | MQTT consumers, REST controllers, job processors |
@@ -132,88 +132,67 @@ payments/
 
 ### 6.1 Payment aggregate — state machine
 
+> Full transition table, guards and refund policy: **[Implementation Plan §C1](backend-implementation-plan.md#c1-payment-state-machine-final)**.
+
 ```text
-              QR created
-  ┌─────────▶ PENDING ──── QR timeout ────▶ EXPIRED
-  │              │
-  │         ABA APPROVED
-  │              ▼
-  │            PAID ──── machine reports DONE ────▶ DISPENSED ✅
-  │              │
-  │       no DONE in 5 min / ERR from machine
-  │              ▼
-  │        REFUND_PENDING ──── operator/auto ────▶ REFUNDED
+                QR created
+  ┌──────────▶ PENDING ───── customer cancels / superseded ─▶ CANCELLED ─┐
+  │              │   └────── TTL + grace, ABA not paid ──────▶ EXPIRED ───┤ ABA APPROVED later
+  │              │                                                         │ (reconcile/callback;
+  │         ABA APPROVED (≤ TTL + grace)                                   │  machine NOT told)
+  │              ▼                                                         ▼
+  │            PAID ─── DONE ok (same machine) ───▶ DISPENSED ✅      REFUND_REVIEW ◀──┐
+  │              │                                                         ▲           │ reopen
+  │              ├── PARTIAL / ERR / PAID,REJECT / BOTTLE_TIMEOUT ─────────┤           │ (admin)
+  │              │                                                         │           │
+  │              └── no outcome after 5 min ──▶ DISPENSE_UNKNOWN ──────────┤    REFUND_REJECTED
+  │                                                 │      (24 h, machine online,       ▲
+  │                                  outcome ok     │       no pending outcomes)        │
+  │                                  replayed ──────┴──▶ DISPENSED ✅                   │
+  │                                                                                     │
+  │   REFUND_REVIEW ── claimed → refund done (operator) or auto ──▶ REFUNDED            │
+  │                └── operator: water was delivered ───────────────────────────────────┘
   │
-  └── ABA DECLINED/CANCELLED ──▶ FAILED
+  └── ABA DECLINED / CANCELLED ──▶ FAILED ── ABA APPROVED later (reconcile) ──▶ REFUND_REVIEW
 ```
 
-**Invariants (enforced inside the aggregate):**
+**Invariants (enforced in the aggregate, DB constraints and sweeps):**
 
 1. Only `PENDING → PAID` may emit `PaymentPaid` (the only event that lets a machine dispense).
-2. A payment cannot be paid after `expiresAt`.
-3. `DONE` is accepted only for a `PAID` payment **from the same machine**.
+2. A payment cannot be paid after `expiresAt + grace`; a late approval goes to `REFUND_REVIEW`, never to dispensing. `markPaid` is idempotent for every state.
+3. An outcome (`DONE`/`PARTIAL`/`ERR`/`PAID,REJECT`) is accepted only for a paid payment **from the same machine**.
 4. A payment dispenses at most once.
-5. Every transition is recorded (`payment_events`) for audit.
+5. **No automatic refund while the dispense outcome is unknown** — outcomes are persisted on the STM32 and ESP32 and replayed until acknowledged.
+6. At most **one open payment (PENDING or PAID) per machine**; a new request supersedes a PENDING one atomically and is refused while one is PAID.
+7. **No payment ABA may still accept is left unobserved** — sweeps check pending payments and reconcile probes terminal ones.
+8. Every transition is recorded (`payment_events`) for audit.
 
-```ts
-export class Payment {
-  private constructor(
-    readonly tranId: TranId,
-    readonly machineId: MachineId,
-    readonly volume: Volume,
-    readonly price: Money,
-    private status: PaymentStatus,
-    private readonly expiresAt: Date,
-    private version: number,
-    private events: DomainEvent[] = [],
-  ) {}
-
-  static create(machineId: MachineId, volume: Volume, price: Money, now: Date): Payment {
-    const p = new Payment(TranId.generate(now), machineId, volume, price, 'PENDING',
-                          new Date(now.getTime() + 3 * 60_000), 0);
-    p.events.push(new PaymentCreated(p.tranId, machineId));
-    return p;
-  }
-
-  markPaid(now: Date) {
-    if (this.status !== 'PENDING') throw new DomainError(`cannot pay a ${this.status} payment`);
-    if (now > this.expiresAt)      throw new DomainError('payment expired');
-    this.status = 'PAID';
-    this.events.push(new PaymentPaid(this.tranId, this.machineId));
-  }
-
-  recordDispense(fromMachine: MachineId) {
-    if (this.status !== 'PAID')              throw new DomainError('not paid');
-    if (!fromMachine.equals(this.machineId)) throw new DomainError('wrong machine');
-    this.status = 'DISPENSED';
-    this.events.push(new PaymentDispensed(this.tranId));
-  }
-
-  pullEvents(): DomainEvent[] { const e = this.events; this.events = []; return e; }
-}
-```
+Reference implementation of the aggregate: Implementation Plan §D2.
 
 ### 6.2 Value objects
 
 | Value object | Rules |
 |---|---|
-| `Money` | Amount + currency (`KHR`/`USD`); KHR ≥ 100, USD ≥ 0.01; no floats in arithmetic (store minor units) |
-| `TranId` | ≤ 20 chars, unique (ABA limit) |
-| `Volume` | One of 500 / 750 / 1000 mL (configurable per machine) |
+| `Money` | Integer minor units + currency: **KHR scale 0** (500 KHR → 500), **USD scale 2** ($0.15 → 15); KHR ≥ 100, USD ≥ 0.01; no floats in arithmetic |
+| `TranId` | ≤ 20 chars (ABA limit): `base36(epoch_ms)` + 6 random digits; ABA rejects duplicates (code 403) → regenerate |
+| `Volume` | Fixed tiers **500 / 750 / 1000 mL** |
 | `MachineId` | Format `WRM-###` |
 
 ### 6.3 Domain events
 
+Main events (full catalog with payloads and subscribers: Implementation Plan §C4):
+
 | Event | Raised by | Consumed by |
 |---|---|---|
-| `PaymentCreated` | Payments | Fleet (last activity), Reporting |
-| `PaymentPaid` | Payments | **MQTT publisher → `pay/status: paid`**, Reporting |
-| `PaymentExpired` / `PaymentFailed` | Payments | MQTT publisher, Reporting |
-| `DispenseCompleted` | Dispensing | Payments (→ DISPENSED), Reporting |
-| `DispenseAccuracyMismatch` | Dispensing | Monitoring (alert) |
-| `RefundRequested` / `Refunded` | Payments | Monitoring, Reporting |
-| `MachineWentOffline` / `MachineCameOnline` | Fleet | Monitoring |
-| `AlertRaised` | Monitoring | Telegram notifier, dashboard |
+| `payments.PaymentCreated` | Payments | MQTT notifier (`pay/qr`), Fleet |
+| `payments.PaymentPaid` | Payments | **MQTT notifier → `pay/status: paid`**, Reporting |
+| `payments.PaymentExpired` / `PaymentCancelled` / `PaymentFailed` | Payments | MQTT notifier, ABA close |
+| `payments.LatePaymentDetected` / `RefundReviewOpened` | Payments | Monitoring, refund executor (auto mode) |
+| `payments.Refunded` / `RefundRejected` / `RefundReopened` | Payments | Reporting, Monitoring |
+| `dispensing.DispenseCompleted` / `DispenseFailed` / `DispenseOutcomeUnknown` | Dispensing | Payments, Reporting, Monitoring |
+| `dispensing.AccuracyMismatch` / `OutcomeRejected` / `ReconciliationNeeded` | Dispensing | Monitoring |
+| `fleet.MachineWentOffline` / `MachineCameOnline` / `MachineConfigChanged` | Fleet | Monitoring, MQTT notifier (`config`) |
+| `monitoring.AlertRaised` / `AlertResolved` | Monitoring | Telegram notifier, dashboard |
 
 ---
 
@@ -222,7 +201,7 @@ export class Payment {
 | Side | Path | Technology |
 |---|---|---|
 | **Command (write)** | Interface → command handler → aggregate → repository + outbox (one transaction) | Prisma |
-| **Query (read)** | Interface → query handler → SQL view / read model | Kysely / raw SQL |
+| **Query (read)** | Interface → query handler → SQL view / read model | Prisma TypedSQL / `$queryRaw` |
 
 - Commands return only an ID or status, never large objects.
 - Queries never load aggregates and never change state.
@@ -245,19 +224,21 @@ Command handler (one DB transaction)
    └── INSERT INTO outbox (id, type, payload, occurred_at)    ← same transaction
             │
             ▼ commit
-Outbox relay (worker, every ~200 ms or LISTEN/NOTIFY)
-   ├── SELECT ... FROM outbox WHERE published_at IS NULL ORDER BY occurred_at
-   │        FOR UPDATE SKIP LOCKED LIMIT 100          ← safe with many workers
-   ├── dispatch to handlers / BullMQ queues (MQTT publish, Telegram, read models)
-   └── UPDATE outbox SET published_at = now()
+Outbox relay (worker, polls every 250 ms — no LISTEN/NOTIFY, so a connection pooler can be added later)
+   ├── SELECT ... FROM outbox WHERE dispatched_at IS NULL ORDER BY occurred_at
+   │        FOR UPDATE SKIP LOCKED LIMIT 20           ← safe with many workers, short locks
+   ├── enqueue one BullMQ job per handler (jobId = eventId:handler → idempotent)
+   └── UPDATE outbox SET dispatched_at = now()
 ```
+
+**Timers are not events.** Money deadlines (QR expiry, ABA polling, outcome timeout, escalation, reconciliation) are columns in PostgreSQL read by repeatable **sweep** jobs, re-created at every worker boot. A Redis data loss therefore only delays work by one sweep interval (Implementation Plan §C5).
 
 ### 8.3 Tables
 
 | Table | Columns |
 |---|---|
-| `outbox` | `id (uuid)`, `aggregate_type`, `aggregate_id`, `event_type`, `payload (jsonb)`, `occurred_at`, `published_at`, `attempts`, `last_error` |
-| `inbox` | `message_id (pk)`, `source` (mqtt/aba), `received_at` — dedupe of incoming messages |
+| `outbox` | `id (uuid)`, `aggregate_type`, `aggregate_id`, `event_type`, `payload (jsonb)`, `occurred_at`, `dispatched_at`, `attempts`, `last_error`, `dead_at` |
+| `inbox` | `message_id (pk)`, `source` (mqtt/aba), `received_at` — dedupe for messages **without a natural key**; always written in the same transaction as the state change. `pay/request` uses `payments(machine_id, request_id)` and `transaction` uses `dispenses(tran_id)` instead. |
 | `payment_events` | `tran_id`, `from_status`, `to_status`, `reason`, `at` — audit trail |
 
 ### 8.4 Delivery guarantees
@@ -266,7 +247,8 @@ Outbox relay (worker, every ~200 ms or LISTEN/NOTIFY)
 |---|---|---|
 | Backend → machine | At least once | Outbox + MQTT QoS 1 + persistent session |
 | Machine → backend | At least once | ESP32 retry + QoS 1 |
-| Duplicates | Harmless | Inbox dedupe + `tran_id` checks on the STM32 and in aggregates |
+| Duplicates | Harmless | Natural idempotency keys (`request_id`, `tran_id`) or inbox + `tran_id` checks on the STM32 and in aggregates |
+| Dispense outcome machine → backend | At least once, survives offline/reboot | ESP32 stores outcome in NVS and re-sends until `transaction/ack` |
 
 ---
 
@@ -275,11 +257,14 @@ Outbox relay (worker, every ~200 ms or LISTEN/NOTIFY)
 | Risk | Pattern |
 |---|---|
 | Crash between state change and notification | **Transactional outbox** |
-| Duplicate MQTT messages | **Idempotent consumers / inbox** |
+| Duplicate MQTT messages | **Idempotent consumers** (natural keys; inbox only inside the state-change transaction) |
 | Concurrent updates to the same payment | **Optimistic locking** (`version` column) |
-| Machine repeats `REQ_PAY` | **Idempotency key** per request → same QR returned |
+| Machine repeats `REQ_PAY` | **Idempotency key** `(machine_id, request_id)` → status-aware replay (live QR re-sent only while PENDING and unexpired) |
+| Callback lost / Redis data lost | **DB-driven sweeps** + **reconcile** probes; no money decision depends on a single message or a Redis timer |
+| UART line lost between ESP32 and STM32 | **Acknowledgements both ways** (`PAID,ACK`, `ACK,<tran_id>`); STM32 keeps its outcome until acknowledged |
 | ABA slow or down | **Timeouts + retry with backoff + circuit breaker** in the PayWay adapter |
-| Paid but not dispensed | **Process manager (saga):** no `DONE` within 5 min → `REFUND_PENDING` |
+| Paid but no outcome reported | **Process manager:** no outcome within 5 min → `DISPENSE_UNKNOWN` (alert, **no refund**); replayed outcome resolves it; still unknown after 24 h → `REFUND_REVIEW` (operator) |
+| Refund needed | **Refund review queue:** operator refunds (ABA portal/cash) and records it; automatic ABA refunds only after ABA confirms the API (`REFUND_MODE`) |
 | Invalid payloads | **Zod validation** at every edge (MQTT, REST, ABA responses) |
 | Poison messages | Max attempts → **dead-letter queue** + alert |
 
@@ -305,7 +290,7 @@ One NestJS (Fastify) instance handles thousands of requests per second, so raw t
 
 ```text
  1,000 machines ─▶ EMQX ─(shared subscription)─┬─▶ API #1 ─┐
-                                               ├─▶ API #2 ─┼─▶ PgBouncer ─▶ PostgreSQL
+                                               ├─▶ API #2 ─┼─▶ Prisma pools ─▶ PostgreSQL
                                                └─▶ API #N ─┘        ▲
                                                     │                │
                                                BullMQ queue ─▶ Workers (rate-limited) ─▶ ABA PayWay
@@ -316,16 +301,17 @@ One NestJS (Fastify) instance handles thousands of requests per second, so raw t
 | Node.js event loop | Non-blocking I/O — thousands of in-flight requests per process |
 | Multiple API instances | Caddy (HTTP) and EMQX shared subscriptions (MQTT) spread the load |
 | Queues (BullMQ) | Bursts are absorbed and processed at a safe rate instead of rejected |
-| PgBouncer | Many requests share a bounded pool of DB connections |
+| Connection pools | Each process uses a small Prisma pool (5); total ≈ 15 connections. PgBouncer only when this budget is exceeded (ADR-0011) |
 | Redis cache | Machine config and prices served from memory |
 
 ### 10.3 Correctness when things happen at the same time
 
 | Situation | Risk | Protection |
 |---|---|---|
-| Customer presses pay twice / ESP32 retries | Two QRs, double charge | **Idempotency key** + **one PENDING payment per machine** (partial unique index) → repeat returns the same QR |
+| Customer presses pay twice / ESP32 retries | Two QRs, double charge | **Idempotency key** `(machine_id, request_id)` → status-aware replay; **one open payment per machine** (partial unique index) with a per-machine row lock |
+| New payment while the previous one is PAID | Two paid payments on one machine | `PAY_MACHINE_BUSY` until the outcome arrives |
 | ABA job and ABA callback both report "paid" | PAID processed twice | **Optimistic locking** (`version`) — second update fails harmlessly |
-| `DONE` delivered twice by MQTT | Sale counted twice | **Inbox dedupe** + aggregate rule "dispense once" |
+| `DONE` delivered twice by MQTT | Sale counted twice | `dispenses.tran_id` primary key + aggregate rule "dispense once" |
 | Two workers take the same outbox row | Machine told PAID twice | `FOR UPDATE SKIP LOCKED`; STM32 ignores a repeated `tran_id` |
 | Payment expires at the moment it is paid | Paid but marked expired | Status + `expires_at` checked in one transaction; ABA re-checked before expiring |
 | Two operators edit the same price | Lost update | Optimistic locking → "changed by someone else" |
@@ -333,17 +319,17 @@ One NestJS (Fastify) instance handles thousands of requests per second, so raw t
 Rule of thumb: **the database is the referee** — unique constraints, transactions and version checks make the number of simultaneous requests irrelevant to correctness.
 
 ```sql
--- At most one open payment per machine
-CREATE UNIQUE INDEX one_pending_payment_per_machine
-  ON payments (machine_id) WHERE status = 'PENDING';
+-- At most one open payment (PENDING or PAID) per machine
+CREATE UNIQUE INDEX one_open_payment_per_machine
+  ON payments (machine_id) WHERE status IN ('PENDING', 'PAID');
 ```
 
 ### 10.4 ABA PayWay is the real bottleneck
 
 | Technique | Effect |
 |---|---|
-| **ABA callbacks** (production has a public HTTPS URL) | Most payments confirmed by push → far less polling |
-| Poll only **pending** payments with backoff (3 s → 5 s → 10 s) | Fewer calls for slow payers |
+| **ABA callbacks** (production has a public HTTPS URL) | Faster confirmation; the callback only **enqueues** a confirm job (always 200) |
+| DB-driven polling of **pending** payments (3 s for 60 s, then 5 s) + **reconcile** probes for terminal payments (+5 min … +6 d) | Works even if every callback is lost |
 | **Rate limiter** on the PayWay adapter (BullMQ limiter) | Never exceed ABA limits (`429`); queue instead of fail |
 | **Circuit breaker** | ABA down → stop calling; machines show "Payment unavailable" |
 | Timeouts + retry with backoff | One slow call cannot block others |
@@ -352,7 +338,7 @@ CREATE UNIQUE INDEX one_pending_payment_per_machine
 
 | Protection | Purpose |
 |---|---|
-| Rate limiting per machine and per dashboard user | A buggy or compromised device cannot flood the server |
+| Rate limiting per machine (`pay/request` token bucket in Redis, shared by all instances) and per dashboard user | A buggy or compromised device cannot flood the server or exhaust ABA limits |
 | MQTT ACL per device | A machine can publish only to `wrm/<its id>/#` |
 | Payload size limits + Zod validation | Malformed or huge messages rejected early |
 | Queue-depth and outbox-lag alerts (backpressure) | Know before the system falls behind |
@@ -376,7 +362,7 @@ CREATE UNIQUE INDEX one_pending_payment_per_machine
 | API | Stateless → more instances behind the proxy |
 | MQTT intake | **EMQX shared subscriptions** `$share/backend/wrm/+/pay/request` — each message to one instance |
 | Workers | More copies; BullMQ balances; outbox uses `SKIP LOCKED` |
-| Database | Indexes, **PgBouncer** pooling, read replicas for reporting, partitioning/TimescaleDB for heartbeats |
+| Database | Indexes, small Prisma pools → **PgBouncer** when needed (ADR-0011), read replicas for reporting, partitioning/TimescaleDB for heartbeats |
 | Hot data | Redis cache (machine config, prices), rate limiting |
 | Future | Any context can be extracted into a service — it already talks only through events and ports |
 
@@ -388,7 +374,7 @@ Capacity guide: one 4 GB VPS → hundreds of machines. Consider services only at
 
 - NestJS on **Fastify** adapter.
 - CQRS read side: dashboard queries hit indexed views, never aggregates.
-- **Kysely / SQL** for heavy reports; Prisma for writes.
+- **Prisma TypedSQL / `$queryRaw`** against SQL views for heavy reports; Prisma models for writes.
 - No N+1 queries (query logging in dev, review in PRs).
 - Targets: QR to machine **< 2 s**; `PAID` to machine **< 3 s** after ABA approval; dashboard queries **< 300 ms**.
 
@@ -438,14 +424,15 @@ Capacity guide: one 4 GB VPS → hundreds of machines. Consider services only at
 |---|---|
 | Backend | **NestJS (Fastify)**, TypeScript strict |
 | Architecture | Modular monolith · DDD · Hexagonal · CQRS-light · Outbox |
-| Database | **PostgreSQL** + Prisma (writes) + Kysely/SQL (reads) + PgBouncer |
-| Jobs / events | **Redis + BullMQ** (outbox relay, ABA polling, sagas, schedules) |
-| Messaging | **EMQX Cloud** (shared subscriptions, per-device auth + ACL) |
-| Validation | **Zod** schemas in `packages/shared` |
+| Database | **PostgreSQL** + Prisma (writes, reads via TypedSQL/raw SQL); PgBouncer later if needed |
+| Jobs / events | **Redis + BullMQ** (outbox dispatch, DB-driven sweeps, ABA checks, notifications) |
+| Messaging | **EMQX Cloud** (shared subscriptions, per-device auth + ACL, MQTT 5 message expiry) |
+| Validation | **Zod** schemas in `packages/contracts` (+ generated C header for firmware) |
+| Rate limiting / resilience | rate-limiter-flexible (Redis) · opossum circuit breaker |
 | Dashboard | **Next.js** + Tailwind + shadcn/ui |
-| Auth | Better Auth + RBAC |
+| Auth | Better Auth (after spike) or NestJS guards + Argon2id + sessions; RBAC |
 | Observability | pino · OpenTelemetry · Prometheus/Grafana · Sentry |
-| Testing | Vitest/Jest · Testcontainers · contract tests · E2E |
+| Testing | Vitest · Testcontainers · contract tests (incl. firmware golden fixtures) · E2E |
 | Delivery | Docker · GitHub Actions — see **Deployment** doc |
 
 ---
@@ -455,26 +442,25 @@ Capacity guide: one 4 GB VPS → hundreds of machines. Consider services only at
 ```text
 water-refill-machine/
 ├── apps/
-│   ├── api/                          NestJS app (API + worker entry points)
+│   ├── api/                          NestJS app (one image; RUN_MODE = all | api | worker)
 │   │   └── src/
 │   │       ├── contexts/
-│   │       │   ├── payments/         domain · application · infrastructure · interface
-│   │       │   ├── dispensing/
-│   │       │   ├── fleet/
-│   │       │   ├── monitoring/
-│   │       │   ├── identity/
+│   │       │   ├── payments/         domain · application · infrastructure · interface (core)
+│   │       │   ├── dispensing/       domain · application · infrastructure · interface (core)
+│   │       │   ├── fleet/            application · interface
+│   │       │   ├── monitoring/       application · interface
+│   │       │   ├── identity/         application · interface
 │   │       │   └── reporting/        queries only
-│   │       ├── shared-kernel/        DomainEvent, AggregateRoot, Result, base errors
-│   │       ├── platform/             outbox, inbox, mqtt client, bullmq, logging, config
-│   │       ├── main.api.ts           HTTP + MQTT consumers
-│   │       └── main.worker.ts        outbox relay + job processors
-│   │   └── prisma/                   schema.prisma + migrations
+│   │       ├── shared-kernel/        DomainEvent, AggregateRoot, Money, Clock, base errors
+│   │       ├── platform/             config, db, outbox, inbox, sweeps, mqtt, queue, ratelimit, logging
+│   │       └── main.ts               boots API, worker or both by RUN_MODE
+│   │   └── prisma/                   schema.prisma + migrations + TypedSQL
 │   └── dashboard/                    Next.js admin
 ├── packages/
-│   └── shared/                       Zod schemas: MQTT topics & payloads, enums
+│   └── contracts/                    Zod: MQTT topics & payloads, REST DTOs, error + fault codes; generated C header
 ├── firmware/
 │   └── esp32-gateway/
-├── infra/                            Docker Compose, Caddy, scripts
+├── infra/                            Docker Compose, Caddy, scripts, load tests
 ├── docs/
 │   └── adr/
 └── pnpm-workspace.yaml
@@ -486,26 +472,30 @@ water-refill-machine/
 
 | Flow | Path |
 |---|---|
-| **Pay** | `pay/request` → inbox dedupe → `CreatePayment` → PayWay adapter (KHQR) → save PENDING + outbox → relay → publish `pay/qr` |
-| **Confirm** | BullMQ job checks ABA every 3 s → `ConfirmPayment` → aggregate `markPaid` → save + outbox → relay → publish `pay/status: paid` |
-| **Dispense** | `transaction` → inbox → `RecordDispense` → accuracy check → `DispenseCompleted` → Payments → DISPENSED; mismatch > 5 % → alert |
-| **Expiry** | Scheduled job → `ExpirePayment` → outbox → `pay/status: expired` |
-| **Refund saga** | PAID without DONE for 5 min (or `ERR`) → `REFUND_PENDING` → auto/operator → PayWay refund → REFUNDED |
+| **Pay** | `pay/request` (rate-limited) → existing `(machine, request_id)`? status-aware replay : PayWay adapter (KHQR) → one transaction (machine lock, busy check, supersede old PENDING, save PENDING + outbox) → relay → publish `pay/qr` (with message expiry) |
+| **Confirm** | Payments sweep (every 3 s) picks payments whose `next_aba_check_at` is due → `check-transaction` → `ConfirmPayment` → `markPaid` → save + outbox → publish `pay/status: paid`; callbacks only enqueue the same confirm job |
+| **Reconcile** | Reconcile sweep probes EXPIRED / CANCELLED / FAILED payments at +5 min, +1 h, +1 d, +3 d, +6 d → late approval → `REFUND_REVIEW` |
+| **Dispense** | STM32 outcome (kept until `ACK`) → ESP32 NVS queue → `transaction` → `RecordDispense` (idempotent on `tran_id`) → accuracy check → `DispenseCompleted` → Payments → DISPENSED → `transaction/ack`; mismatch > 5 % → alert |
+| **Expiry** | Payments sweep: `expires_at + grace` passed → final ABA check → `ExpirePayment` → outbox → `pay/status: expired` + ABA close |
+| **Outcome timeout** | Dispensing sweep: PAID without outcome for 5 min → DISPENSE_UNKNOWN (alert, no refund); 24 h and machine online with no pending outcomes → REFUND_REVIEW |
+| **Refund review** | PARTIAL / ERR / `PAID,REJECT` / late payment / escalated unknown → `REFUND_REVIEW` + refund case → operator claims and refunds (or auto when enabled) → REFUNDED / REFUND_REJECTED (reopenable) |
 | **Online/offline** | `online` (Last Will) + heartbeats → Fleet → offline after 3 min → `MachineWentOffline` → alert |
 
 ---
 
 ## 18. Build order
 
-| Step | Deliverable | Done when |
-|---|---|---|
-| 1 | Monorepo, NestJS (Fastify), Prisma, Docker Compose (Postgres, Redis, Mosquitto), lint/boundaries, CI | Empty app builds and tests run in CI |
-| 2 | Platform: outbox, inbox, MQTT client, BullMQ, logging | Outbox relay publishes test events |
-| 3 | **Payments** context (aggregate, PayWay adapter, consumers, jobs) | Existing ESP32 works unchanged against the new backend |
-| 4 | **Dispensing** context + saga to refund | DONE recorded; missing DONE → REFUND_PENDING |
-| 5 | **Fleet** + **Monitoring** (Telegram) | Offline and accuracy alerts arrive in Telegram |
-| 6 | **Identity** + **Reporting** + Next.js dashboard | Operators log in and see sales/machines |
-| 7 | Staging + production deployment | See **Deployment** doc |
+The detailed, phase-by-phase build order (Phases 0–11, incl. the early pilot) is in the **[Implementation Plan](backend-implementation-plan.md#part-e--phases)**. Summary:
+
+| Phase | Deliverable |
+|---|---|
+| 0–1 | Monorepo, CI, platform (outbox, sweeps, MQTT, queues, logging) |
+| 2 | Payments (incl. reconcile and minimal outcome recording) — prototype cut-over |
+| 3 | Dispensing + refund review; UART/NVS acknowledgements |
+| 3.5 | Early pilot on a minimal production environment (runs in parallel) |
+| 4–7 | Fleet, Monitoring, Identity, Reporting + dashboard |
+| 8–10 | Observability, full production deployment, hardening, go-live decision |
+| 11 | OTA (after go-live) |
 
 ---
 
