@@ -28,7 +28,8 @@ A streamlined, production-focused documentation library for the **IoT Cashless W
 │   ├── qr-payment-flow.md             ← Cashless QR payment lifecycle & timeouts
 │   ├── api-and-database.md            ← REST API endpoints & PostgreSQL schema
 │   ├── stm32-qr-payment-integration.md ← STM32 ↔ backend QR payment guide
-│   └── backend-architecture.md        ← Modular monolith · DDD · Hexagonal · CQRS · Outbox
+│   ├── backend-architecture.md        ← Modular monolith · DDD · Hexagonal · CQRS · Outbox
+│   └── backend-implementation-plan.md ← Phase-by-phase build plan, contracts, errors, DoD
 │
 ├── 🏗️ 05-Mechanical-and-Plumbing/
 │   ├── enclosure-and-tank.md          ← Stainless 304 dimensions, layout & 60L tank
