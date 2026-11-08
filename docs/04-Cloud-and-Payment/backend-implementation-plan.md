@@ -6,10 +6,10 @@
 | | |
 |---|---|
 | **Version** | **v3** — revised after two external architecture reviews |
-| **Status** | Approved plan — implementation not started |
+| **Status** | Approved plan — progress is tracked in **[PROGRESS.md](../PROGRESS.md)** (not in this file) |
 | **Owner** | Backend (also owns the ESP32 gateway) |
 | **Prototype** | `backend/` (Node.js) stays running until Phase 2 cut-over |
-| **Last updated** | 2026-11-06 |
+| **Last updated** | 2026-11-08 |
 
 ### Revision history
 
@@ -32,6 +32,8 @@
 | v3 | Minimal `transaction` recording in **Phase 2**; machine provisioning endpoint; refunds in revenue reports; enums/relations/timestamps in schema | Cut-over gap; operations; data integrity |
 | v3 | **Early pilot** (Phase 3.5) running in parallel; go-live ≈ week 20 | Pilot could not fit in a 2-week phase |
 | v3 | Architecture and Deployment docs re-synchronised | Document drift |
+| v3.1 | **C10 ABA PayWay API reference** (moved out of prototype code); **Read before starting** per phase | Prototype is deleted after Phase 3; agents need every input listed |
+| v3.1 | AI-agent handoff: `PROGRESS.md`, task tags `[HUMAN]` / `[HARDWARE]` / `[MANUAL CHECK]`, **Needs before starting** per phase, handoff DoD item, B8 commit style | Several developers / AI agents continue each other's phases |
 
 ---
 
@@ -48,12 +50,24 @@
 
 # Part A — How to use this plan
 
+0. **Start of every session:** read `CLAUDE.md` (repo root) → **[`docs/PROGRESS.md`](../PROGRESS.md)** (current phase + handoff note of the previous phase) → Part A–C of this plan → the current phase only.
 1. Work **one phase at a time**, in order (Phase 3.5 pilot runs in parallel with Phases 4–10). A phase is finished only when its **Definition of Done** is fully checked.
 2. Each phase lists: **Goal → Tasks → Error handling → Tests → Definition of Done**.
 3. **Part B** and **Part C** apply to all phases — read them before Phase 0.
 4. Significant decisions go into an **ADR** (`docs/adr/NNNN-title.md`) before code.
 5. Contract changes (MQTT, UART, REST, DB, fault codes) require: update Part C → update `packages/contracts` → regenerate firmware header (C9) → update tests → update firmware docs — in **one** pull request.
-6. **System invariants** (must never be broken by any change):
+6. **Task tags:**
+
+   | Tag | Meaning | What an AI agent does |
+   |---|---|---|
+   | *(none)* | Code, tests, docs | Do it |
+   | **`[HUMAN]`** | Needs a person: accounts, payments, servers, secrets, emails, GitHub settings | Do **not** do it. Prepare what you can (scripts, text) and list it under "Waiting for human" in `PROGRESS.md` |
+   | **`[HARDWARE]`** | STM32 work by the hardware developer (Keil) | Do **not** do it. Only provide contracts, fixtures and docs |
+   | **`[MANUAL CHECK]`** | DoD item that needs real devices (ESP32, STM32, ABA app) | Write the steps; a person runs them and ticks the box in `PROGRESS.md` |
+
+   A phase may be marked **done** only when every DoD item is ticked, including `[MANUAL CHECK]` items confirmed by a person.
+7. **End of every phase:** tick the DoD in `PROGRESS.md`, write the **handoff note** (template in `PROGRESS.md`), and update this plan if anything changed.
+8. **System invariants** (must never be broken by any change):
    1. No water without a confirmed payment for that machine and `tran_id`.
    2. A payment dispenses at most once.
    3. No automatic refund while the dispense outcome is unknown.
@@ -333,9 +347,16 @@ Rules: no real ABA calls in CI; `FakeClock`; isolated data; flaky test = bug. Mo
 
 ## B8 Git workflow & definition of done
 
-Branches `feat/<phase>-<topic>`; PR to `main`; squash merge; Conventional Commits; PR checklist (tests · contracts · ADR · docs · no secrets).
+Branches `feat/phase-<n>-<topic>` (e.g. `feat/phase-1-outbox`); PR to `main`; PR checklist (tests · contracts · ADR · docs · no secrets · `PROGRESS.md` updated).
 
-**Global Definition of Done:** code follows B2/B3 (depcruise passes) · errors per B4 · logs/metrics per B6 · tests per B7 pass · contracts/docs updated · reviewed and merged.
+**Commit style (team rule):**
+- **One commit per topic** — never one commit for the whole phase.
+- Subject: imperative, capitalised, no prefix, ≤ 72 chars — e.g. `Add outbox relay with SKIP LOCKED batching`, `Fix grace boundary in payment expiry sweep`. **No** Conventional-Commit prefixes (`feat:`, `fix:`).
+- **No `Co-Authored-By` or AI attribution lines.**
+- Never commit secrets (`.env`, `secrets.h`, keys) or `docs_archive_all_60/`.
+- Merge with a normal merge (keep the topic commits); no squash.
+
+**Global Definition of Done:** code follows B2/B3 (depcruise passes) · errors per B4 · logs/metrics per B6 · tests per B7 pass · contracts/docs updated · `PROGRESS.md` handoff note written · reviewed and merged.
 
 ---
 
@@ -766,6 +787,115 @@ Defined once in `packages/contracts/src/faults.ts` and generated into the firmwa
 
 ---
 
+## C10 ABA PayWay API reference
+
+Everything needed to call ABA PayWay. This was proven against the sandbox by the prototype (`backend/src/payway.js`), which is deleted after Phase 3, so **this section is the reference**. Official docs: [generate QR](https://developer.payway.com.kh/qr-api-14530840e0) · [check transaction](https://developer.payway.com.kh/check-transaction-14530826e0).
+
+### C10.1 Basics
+
+| Item | Value |
+|---|---|
+| Sandbox base URL | `https://checkout-sandbox.payway.com.kh` |
+| Live base URL | Given by ABA with the live account (`PAYWAY_BASE_URL`) |
+| Method / body | `POST`, `Content-Type: application/json` |
+| Credentials | `PAYWAY_MERCHANT_ID` (e.g. `ec480065` in sandbox) and `PAYWAY_API_KEY` (secret, never logged) |
+| `req_time` | UTC, format `YYYYMMDDHHmmss` (e.g. `20261108093015`) |
+| Signature (`hash`) | **Base64( HMAC-SHA512( concatenated fields, PAYWAY_API_KEY ) )** |
+| Live requirement | Server's **static public IP must be whitelisted** by ABA |
+| Sandbox currency | **USD only** (KHR returned code `12`, currency not allowed) |
+| Timeout | 8 s per call (D7), circuit breaker |
+
+```ts
+const hash = createHmac('sha512', apiKey).update(message, 'utf8').digest('base64');
+```
+
+### C10.2 Generate QR: `POST /api/payment-gateway/v1/payments/generate-qr`
+
+Fields, **in hash order** (the order is fixed by ABA; do not change it):
+
+| # | Field | Value we send |
+|---|---|---|
+| 1 | `req_time` | Current UTC time (C10.1) |
+| 2 | `merchant_id` | `PAYWAY_MERCHANT_ID` |
+| 3 | `tran_id` | From `TranIdGenerator` (≤ 20 chars, B3) |
+| 4 | `amount` | Major units: USD `0.15`, KHR `500` (converted from `Money`, B3) |
+| 5 | `items` | `""` |
+| 6 | `first_name` | `""` |
+| 7 | `last_name` | `""` |
+| 8 | `email` | `""` |
+| 9 | `phone` | `""` |
+| 10 | `purchase_type` | `purchase` |
+| 11 | `payment_option` | `abapay_khqr` |
+| 12 | `callback_url` | **Base64** of `PAYWAY_CALLBACK_URL`, or `""` |
+| 13 | `return_deeplink` | `""` |
+| 14 | `currency` | `USD` or `KHR` |
+| 15 | `custom_fields` | `""` |
+| 16 | `return_params` | `""` |
+| 17 | `payout` | `""` |
+| 18 | `lifetime` | `PAYMENT_TTL_MINUTES`, **minutes, minimum 3** |
+| 19 | `qr_image_template` | `template3_color` |
+
+**Rules:**
+1. `message` = values of fields 1–19 converted to strings and joined **with no separator**, in the order above. **Empty fields are included as `""`.**
+2. The JSON body contains **only the non-empty fields** plus `hash`. ABA validation can fail on empty optional strings.
+3. Success when `status.code` = `0`. Use `qrString` (raw KHQR text, ~240 chars; this is what goes to the machine). `qrImage` and `abapay_deeplink` are ignored.
+4. Other codes → mapping in **D7** (`403` = duplicate `tran_id` → regenerate).
+
+**Example** (sandbox, USD 0.15, no callback; `hash` shortened):
+
+```text
+message = "20261108093015" + "ec480065" + "m3k9x2a1123456" + "0.15" + "" + "" + "" + "" + ""
+        + "purchase" + "abapay_khqr" + "" + "" + "USD" + "" + "" + "" + "3" + "template3_color"
+```
+```json
+{
+  "req_time": "20261108093015",
+  "merchant_id": "ec480065",
+  "tran_id": "m3k9x2a1123456",
+  "amount": 0.15,
+  "purchase_type": "purchase",
+  "payment_option": "abapay_khqr",
+  "currency": "USD",
+  "lifetime": 3,
+  "qr_image_template": "template3_color",
+  "hash": "q8Zx…=="
+}
+```
+Response (success): `{ "status": { "code": "0", "message": "…" }, "qrString": "000201010212…", "qrImage": "data:image/png;base64,…", "abapay_deeplink": "…" }`
+
+### C10.3 Check transaction: `POST /api/payment-gateway/v1/payments/check-transaction-2`
+
+| Field | Value |
+|---|---|
+| `req_time` | Current UTC time |
+| `merchant_id` | `PAYWAY_MERCHANT_ID` |
+| `tran_id` | The payment's `tran_id` |
+| `hash` | Base64(HMAC-SHA512(`req_time + merchant_id + tran_id`, key)) |
+
+Response: `{ "status": { "code": "00", … }, "data": { "payment_status_code": 0, "payment_status": "APPROVED", … } }`
+
+| `status.code` | `payment_status_code` | Meaning → `GatewayStatus` |
+|---|---|---|
+| `00` / `0` | `0` | APPROVED → `approved` |
+| `00` / `0` | `2` | PENDING → `pending` |
+| `00` / `0` | `3` / `7` | DECLINED / CANCELLED → `declined` |
+| `00` / `0` | `4` | REFUNDED → `refunded` |
+| `6` | — | Not found → `not_found` (**= not paid yet**, pending until expiry + grace, B4.8) |
+
+Only works for transactions **created in the last 7 days** (hence the reconcile schedule ending at +6 d, B4.8). Polling schedule: B4.8. Other codes: D7.
+
+### C10.4 Callback (pushback): `POST /v1/payway/callback`
+
+- ABA calls the URL given (Base64) in `callback_url` when a payment happens. The body contains `tran_id`.
+- **Never trust the body.** Read only `tran_id`, enqueue `payments.confirm`, and **always answer HTTP 200** (also for unknown, duplicate or malformed bodies). The job confirms the payment with **check-transaction (C10.3)**.
+- Callbacks can be lost. Sweeps and reconcile (B4.8) must work with the callback endpoint disabled (Phase 2 DoD).
+
+### C10.5 Not yet confirmed by ABA (see F3)
+
+Close-transaction, KHQR refund API, callback retry policy and source IPs, rate limits, KHR on the live account. Record the answers in **ADR-0009** and update this section.
+
+---
+
 # Part D — Core code patterns
 
 ### D1 Aggregate base & domain event
@@ -973,7 +1103,7 @@ export interface PaymentGateway {
 |  | `11`, `429` | `GatewayUnavailableError` |
 |  | `5` (invalid hash), `8` (invalid merchant profile) | `GatewayRejectedError` (alert) |
 
-Codes come from the PayWay docs used by the prototype; each is verified with a recorded sandbox response and documented in **ADR-0009** (with close-transaction and refund once ABA answers). One contract test per code per operation. The adapter also converts `Money` to ABA major units, applies an 8 s timeout and the opossum breaker, and records metrics.
+Request formats and signing: **C10**. Codes come from the PayWay docs used by the prototype; each is verified with a recorded sandbox response and documented in **ADR-0009** (with close-transaction and refund once ABA answers). One contract test per code per operation. The adapter also converts `Money` to ABA major units, applies an 8 s timeout and the opossum breaker, and records metrics.
 
 ---
 
@@ -1001,6 +1131,8 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 
 **Goal:** an empty but production-shaped monorepo where CI enforces every rule from day one.
 **Implements:** Architecture §15–16; Deployment §4 (CI); Plan B1–B3, B8.
+**Needs before starting:** Node.js 22, pnpm, Docker Desktop running, Git access to the repo.
+**Read before starting:** `CLAUDE.md`, `docs/PROGRESS.md`; Architecture §15–16; Deployment §4; Plan B1–B3, B8; current `backend/README.md` and `esp32-gateway/README.md` (paths to move).
 
 **Tasks**
 1. Restructure: `backend/` → `backend-prototype/`, `esp32-gateway/` → `firmware/esp32-gateway/`; update READMEs/paths.
@@ -1010,16 +1142,19 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 5. Vitest + SWC; sample unit test; Testcontainers smoke test.
 6. `infra/docker-compose.yml`: postgres 16, redis 7, mosquitto 2 (password + ACL).
 7. `ci.yml`: install → lint → typecheck → depcruise → unit → integration → build.
-8. Branch protection on `main`.
-9. ADRs: `0001-modular-monolith`, `0002-ddd-core-only-hexagonal`, `0003-transactional-outbox`, `0004-postgres-prisma-only`, `0005-bullmq-and-db-driven-sweeps`, `0006-error-handling-and-idempotency`, `0007-payment-state-machine` (C1 + system invariants A6), `0008-refund-policy-and-mode`, `0011-no-pgbouncer-at-start`.
-10. Send the **ABA question list** (F3) to ABA integration support; send **C3 + C8** to the STM32 developer for acceptance.
+8. `[HUMAN]` Branch protection on `main` (GitHub settings).
+9. ADRs: `0001-modular-monolith`, `0002-ddd-core-only-hexagonal`, `0003-transactional-outbox`, `0004-postgres-prisma-only`, `0005-bullmq-and-db-driven-sweeps`, `0006-error-handling-and-idempotency`, `0007-payment-state-machine` (C1 + system invariants A8), `0008-refund-policy-and-mode`, `0011-no-pgbouncer-at-start`.
+10. `[HUMAN]` Send the **ABA question list** (F3) to ABA integration support; send **C3 + C8** to the STM32 developer for acceptance. (Agent: prepare the message text.)
+11. Update every path changed by task 1: `README.md`, `HANDOFF.md`, `CLAUDE.md`, firmware README, flash command.
 
 **Definition of Done**
 - [ ] Clean clone: `pnpm i && pnpm build && pnpm test` passes
 - [ ] Local compose starts postgres, redis, mosquitto
 - [ ] A deliberate cross-layer import fails CI
-- [ ] ADRs merged; ABA questions sent; STM32 developer confirmed C3 rules (or changes merged into C3)
+- [ ] ADRs merged
+- [ ] `[MANUAL CHECK]` ABA questions sent; STM32 developer confirmed C3 rules (or changes merged into C3)
 - [ ] Prototype still runs from `backend-prototype/`
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1027,6 +1162,8 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 
 **Goal:** reusable building blocks; no business logic.
 **Implements:** Architecture §8, §13 (logs); Plan B4–B6, C5 (framework), C6 (Outbox, Inbox, Heartbeat), D1, D3, D4.
+**Needs before starting:** Phase 0 done; Docker running (Testcontainers, local compose). No external accounts (local mosquitto replaces EMQX).
+**Read before starting:** Phase 0 handoff note; Architecture §8, §13; Plan B4–B6, C5, C6 (Outbox, Inbox, Heartbeat), D1, D3, D4; `infra/docker-compose.yml`.
 
 **Tasks**
 1. **Config:** Zod schema for B5; fail fast; `RUN_MODE`.
@@ -1049,6 +1186,7 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 - [ ] `FLUSHALL` on Redis → sweeps resume within one interval
 - [ ] `/health/ready` accurate; logs carry `traceId`; secrets redacted
 - [ ] `RUN_MODE=all` runs API + worker in one process
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1056,6 +1194,8 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 
 **Goal:** full payment lifecycle on the new backend, including late-payment detection; dispense outcomes recorded and acknowledged; prototype retired.
 **Implements:** Architecture §4, §6, §7, §9, §10.3–10.4, §17 (Pay, Confirm, Expiry, Reconcile); Plan C1 (payment part), C2, C4, C5, C6, C7, D2, D3, D5, D6 (minimal), D7.
+**Needs before starting:** Phase 1 done; ABA sandbox keys in `apps/api/.env` (ask the backend owner — never commit); EMQX test user for the backend; for the cut-over, a person with the ESP32 board and the ABA simulator app.
+**Read before starting:** Phase 1 handoff note; Architecture §4, §6, §7, §9, §10.3–10.4, §17; Plan C1, C2, C4–C7, **C10**, D2, D3, D5–D7; `backend-prototype/src/payway.js`, `backend-prototype/src/mqtt.js`, `backend-prototype/test/mqtt-flow.test.js`; `firmware/esp32-gateway/src/main.cpp` + README.
 
 **Tasks**
 1. **Contracts:** `pay/request`, `pay/cancel`, `pay/qr`, `pay/status`, `transaction`, `transaction/ack` (+ legacy payload).
@@ -1065,9 +1205,9 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 5. **Interface:** consumers `pay/request` (rate-limited), `pay/cancel`; outbox handlers → `pay/qr`, `pay/status` (with message expiry), `payments.close`; jobs `payments.aba-check`, `payments.confirm`; REST callback (queued, always 200), `GET /v1/payments/:tranId`, dev simulate.
 6. **Minimal outcome recording:** `transaction` consumer that stores `dispenses`, moves PAID → DISPENSED for `ok`, stores others as pending review data, sends `transaction/ack` (full rules in Phase 3).
 7. **Migrations:** machines (incl. `mqtt_username`), machine_prices (+ tier CHECK), payments (+ `one_open_payment_per_machine`), payment_events, dispenses, dispense_rejections, refund_cases; seed WRM-001 / WRM-900.
-8. **ABA verification:** record sandbox responses for every D7 code; ADR-0009 (codes, lifetime minutes, close-transaction, duplicate `tran_id`).
-9. **ESP32 firmware v0.3:** `request_id` (hardware RNG) + `v:1`; device retry policy for `pay/request` (B4.7); local cancel + discard stale/foreign `pay/qr`; send remaining seconds in `QR`; `CANCEL`/`CANCELLED`; publish `transaction` from `DONE` with `ts`, wait for `transaction/ack` (NVS queue completed in Phase 3).
-10. **Cut-over:** new backend + EMQX test deployment + real ESP32; when the E2E list passes, stop the prototype.
+8. **ABA verification** (needs sandbox keys): record sandbox responses for every D7 code; ADR-0009 (codes, lifetime minutes, close-transaction, duplicate `tran_id`).
+9. **ESP32 firmware v0.3** (agent writes code + host tests; `[HUMAN]` flashes the board): `request_id` (hardware RNG) + `v:1`; device retry policy for `pay/request` (B4.7); local cancel + discard stale/foreign `pay/qr`; send remaining seconds in `QR`; `CANCEL`/`CANCELLED`; publish `transaction` from `DONE` with `ts`, wait for `transaction/ack` (NVS queue completed in Phase 3).
+10. `[HUMAN]` **Cut-over:** new backend + EMQX test deployment + real ESP32; when the E2E list passes, stop the prototype. (Agent: write the step-by-step cut-over checklist.)
 
 **Error handling (specific)**
 - Duplicate `pay/request` → status-aware replay (D5 table), never a second payment.
@@ -1085,11 +1225,12 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 - E2E: request → QR → approve → `paid` → `DONE` → DISPENSED + ack; duplicate request; cancel before QR (ESP32 local cancel); supersede; expiry + late approval found by reconcile (callback dropped); ABA down → `failed`.
 
 **Definition of Done**
-- [ ] Real ESP32: `1` → QR → ABA simulator pay → `PAID` → `DONE` → **`transaction/ack` received**, on the new backend
+- [ ] `[MANUAL CHECK]` Real ESP32: `1` → QR → ABA simulator pay → `PAID` → `DONE` → **`transaction/ack` received**, on the new backend
 - [ ] 20 parallel `pay/request` for one machine leave exactly one open payment
 - [ ] With the callback endpoint disabled, payments still confirm via sweeps, and a late payment is found by reconcile
 - [ ] Killing api/worker or flushing Redis never loses or duplicates `PAID`
 - [ ] Prototype stopped; firmware docs updated
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1097,13 +1238,15 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 
 **Goal:** every outcome is recorded even after network loss or reboot; every money problem becomes a claimed, auditable refund decision; never a refund while the outcome is unknown.
 **Implements:** Plan C1 (PAID → …), C2, C3 (acks, safety rules 2–4), C4, C5 (`sweep.dispensing`, refund-execute), C6, C7 (refund endpoints), C8, D6.
+**Needs before starting:** Phase 2 done (cut-over passed); ESP32 board for device checks; STM32 status from the hardware developer (see `PROGRESS.md` → Hardware status).
+**Read before starting:** Phase 2 handoff note; Plan C1 (PAID → … and refund policy), C2, C3 (incl. STM32 safety rules), C4, C5, C6, C7, C8, D6; `firmware/esp32-gateway/src/main.cpp`; `docs/PROGRESS.md` → Hardware status.
 
 **Tasks**
 1. Domain: `Dispense` (accuracy `|flow − weight| / volume × 100`, mismatch > 5 %); `Payment.recordOutcome`, `markDispenseUnknown`, `claimRefund`, `markRefunded`, `rejectRefund`, `reopenRefund`; refund policy function (C1).
 2. Application: full `RecordDispense` (incl. `error` with `tran_id`, `PAID_NOT_ACCEPTED`, `BOTTLE_TIMEOUT`, late outcomes, clock skew); `sweep.dispensing` (C1 escalation rules using machine `pending_outcomes` and online history); refund case commands; auto refund executor behind `REFUND_MODE=auto`.
 3. Interface: complete D6 (rejections persisted, permanent `rejected` acks); `error` consumer; refund-case endpoints (local-only until Phase 6) incl. claim and `REFUND_BLOCKED_PENDING_OUTCOMES`.
-4. **ESP32 firmware v0.4:** NVS outcome queue (capacity 64, max age 7 d, backoff 5 s → 5 min + jitter), `ACK,<tran_id>` to STM32 after NVS write, `PAID` repeat until `PAID,ACK`/`PAID,REJECT`, heartbeat counters (`pending_outcomes`, `rejected_outcomes`, `dropped_outcomes`), survives reboot.
-5. **STM32 (hardware developer, parallel):** C3 safety rules 1–5; outcome persistence; `PONG` fields; fault codes (C8). Integration test with the ESP32 using the golden fixtures (C9).
+4. **ESP32 firmware v0.4** (agent writes code; `[HUMAN]` flashes and runs the device tests): NVS outcome queue (capacity 64, max age 7 d, backoff 5 s → 5 min + jitter), `ACK,<tran_id>` to STM32 after NVS write, `PAID` repeat until `PAID,ACK`/`PAID,REJECT`, heartbeat counters (`pending_outcomes`, `rejected_outcomes`, `dropped_outcomes`), survives reboot.
+5. `[HARDWARE]` **STM32 (hardware developer, parallel):** C3 safety rules 1–5; outcome persistence; `PONG` fields; fault codes (C8). Integration test with the ESP32 using the golden fixtures (C9).
 
 **Error handling**
 - Non-PAID / wrong machine / unknown payment / malformed → persisted in `dispense_rejections` → permanent `ack rejected` → critical alert.
@@ -1121,9 +1264,10 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 
 **Definition of Done**
 - [ ] Every PAID payment ends in DISPENSED, REFUNDED or REFUND_REJECTED — none refunded while outcome unknown
-- [ ] Outcomes survive ESP32 reboot, STM32 reboot and 2 h offline
+- [ ] `[MANUAL CHECK]` Outcomes survive ESP32 reboot, STM32 reboot and 2 h offline
 - [ ] No infinite replay: every outcome is acked `ok` or `rejected`, or expires by policy (counted)
 - [ ] Two operators cannot refund the same case
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1131,16 +1275,19 @@ Codes come from the PayWay docs used by the prototype; each is verified with a r
 
 **Goal:** real-world data from one machine while the remaining phases are built.
 **Implements:** Deployment §1 (production environment, minimal layout), §14 (pilot items).
+**Needs before starting:** Phase 3 done; `[HUMAN]` VPS with static IP, managed PostgreSQL, EMQX `wrm-prod`, Sentry account, pilot site. The agent prepares scripts and configs; a person creates accounts and runs the deploy.
+**Read before starting:** Phase 3 handoff note; Deployment §1, §8, §14; Plan B5 (config + connection budget), C10.1 (live URL, IP whitelist).
 
 **Tasks**
-1. Minimal production environment: one VPS (static IP), `RUN_MODE=all`, managed PostgreSQL (smallest plan, ≥ 25 connections), Redis, Caddy, EMQX `wrm-prod`, daily backup, Sentry. Manual deploy script (CI/CD comes in Phase 9).
-2. ABA: **live** merchant account if ready (else continue internal pilot on sandbox with the ABA simulator); register the static IP.
-3. Provision WRM-001 (manual SQL + EMQX user until Phase 4); install at a friendly site.
-4. Pilot operations: daily review of payments, outcomes, refund cases (via REST/SQL until Phase 7), weekly pilot log.
+1. `[HUMAN]` (agent writes compose file, Caddyfile, deploy script) Minimal production environment: one VPS (static IP), `RUN_MODE=all`, managed PostgreSQL (smallest plan, ≥ 25 connections), Redis, Caddy, EMQX `wrm-prod`, daily backup, Sentry. Manual deploy script (CI/CD comes in Phase 9).
+2. `[HUMAN]` ABA: **live** merchant account if ready (else continue internal pilot on sandbox with the ABA simulator); register the static IP.
+3. `[HUMAN]` Provision WRM-001 (manual SQL + EMQX user until Phase 4); install at a friendly site.
+4. `[HUMAN]` Pilot operations: daily review of payments, outcomes, refund cases (via REST/SQL until Phase 7), weekly pilot log.
 
 **Definition of Done**
-- [ ] One machine taking real (or simulator) payments end to end on the production environment
+- [ ] `[MANUAL CHECK]` One machine taking real (or simulator) payments end to end on the production environment
 - [ ] Pilot log started; issues feed later phases
+- [ ] `PROGRESS.md` updated with handoff note
 
 The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evidence for the go-live decision.
 
@@ -1150,11 +1297,13 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** provision and manage machines remotely; know which are online.
 **Implements:** Architecture §4 (Fleet), §17 (Online/offline); Plan C2 (`heartbeat`, `online`, `config`, `config/ack`), C3 (`CFG`, `PONG`), C7 (machines), C8.
+**Needs before starting:** Phase 3 done; EMQX management API key (`[HUMAN]` creates it) if automatic credentials are used; ESP32 board; STM32 `CFG` support from the hardware developer.
+**Read before starting:** Phase 3 handoff note; Architecture §4 (Fleet), §17; Plan C2 (`heartbeat`, `online`, `config`, `config/ack`), C3 (`CFG`, `PONG`), C6, C7 (machines), C8; `firmware/esp32-gateway/src/main.cpp`.
 
 **Tasks**
 1. Fleet service (2-layer): provisioning (`POST /v1/machines`: row + default prices + MQTT username + one-time password; EMQX credential via EMQX management API if available, otherwise documented manual step — verify in this phase), enable/disable, prices (fixed tiers), currency, credential rotation, decommission; replaces temporary `MachinePort`.
 2. Consumers `heartbeat` (updates `last_stm32_state`, `pending_outcomes`), `online`, `config/ack`; retained `config` on `MachineConfigChanged`; `sweep.fleet-offline`.
-3. **ESP32 firmware v0.5:** `config` → `CFG` until `CFG,OK` → `config/ack`; resend after STM32 reboot (`PONG` state); full heartbeat.
+3. **ESP32 firmware v0.5** (`[HUMAN]` flashes): `config` → `CFG` until `CFG,OK` → `config/ack`; resend after STM32 reboot (`PONG` state); full heartbeat.
 4. Heartbeat retention (30 days).
 
 **Error handling:** unknown machine heartbeat → warn + metric (no auto-register); `config/ack error` → `fleet.ConfigRejected` alert; price payload missing a tier → `VALIDATION_FAILED`.
@@ -1163,7 +1312,8 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Definition of Done**
 - [ ] New machine provisioned via API and online without manual DB edits (EMQX step documented if manual)
-- [ ] Offline within 3 min of power loss; price change confirmed by `CFG,OK`
+- [ ] `[MANUAL CHECK]` Offline within 3 min of power loss; price change confirmed by `CFG,OK`
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1171,6 +1321,8 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** operators learn about problems immediately, without alert storms.
 **Implements:** Architecture §4 (Monitoring), §13; Plan C4, C5 (`notify.telegram`), C6 (Alert), C7, C8.
+**Needs before starting:** Phase 4 done; `[HUMAN]` Telegram bot token + chat ID in `.env`.
+**Read before starting:** Phase 4 handoff note; Architecture §4 (Monitoring), §13; Plan C4, C5 (`notify.telegram`), C6 (Alert), C7, C8.
 
 **Tasks**
 1. Alert service (2-layer): dedupe key, severity, lifecycle; rules as pure functions.
@@ -1182,7 +1334,9 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 **Tests:** unit (rules, dedupe), integration (retries), E2E (unplug ESP32 → Telegram within 4 min; reconnect → resolved).
 
 **Definition of Done**
-- [ ] One alert per incident for every rule; critical alerts reach Telegram
+- [ ] One alert per incident for every rule
+- [ ] `[MANUAL CHECK]` Critical alerts reach Telegram (unplug-ESP32 test)
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1190,6 +1344,8 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** secure dashboard access with roles and a full audit trail.
 **Implements:** Architecture §4 (Identity), §14; Deployment §8; Plan C6, C7.
+**Needs before starting:** Phase 5 done. No external accounts needed.
+**Read before starting:** Phase 5 handoff note; Architecture §4 (Identity), §14; Deployment §8; Plan C6, C7.
 
 **Tasks**
 1. **Spike (≤ 2 days):** Better Auth in NestJS + Fastify; else fallback (NestJS guards + Argon2id + `sessions`, HTTP-only cookies) — ADR-0010.
@@ -1205,6 +1361,7 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 **Definition of Done**
 - [ ] Only health, callback and auth reachable without a session
 - [ ] Every sensitive action audit-logged
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1212,6 +1369,8 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** operators see sales, machines, alerts and the refund queue, and act on them.
 **Implements:** Architecture §7 (read side), §4 (Reporting); Plan C7 (reports).
+**Needs before starting:** Phase 6 done (login + roles). No external accounts needed.
+**Read before starting:** Phase 6 handoff note; Architecture §4 (Reporting), §7; Plan C1 (refund policy), C6, C7 (reports + refund endpoints).
 
 **Tasks**
 1. SQL views / materialized views: `sales_daily` (gross, refunds, **net**), `sales_by_machine`, `machine_status_view`, `refund_queue_view`; Prisma TypedSQL; refresh `CONCURRENTLY` every 5 min.
@@ -1224,6 +1383,7 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 **Definition of Done**
 - [ ] Gross, refunds and net revenue match DB totals for seeded scenarios (both currencies)
 - [ ] Refund queue fully operable from the UI and audit-logged
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1231,12 +1391,15 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** follow every payment end to end; alerts before customers notice.
 **Implements:** Architecture §13; Deployment §10; Plan B6.
+**Needs before starting:** Phase 7 done; `[HUMAN]` Grafana Cloud account + OTLP endpoint/token, Sentry DSN, Telegram ops chat.
+**Read before starting:** Phase 7 handoff note; Architecture §13; Deployment §10; Plan B6.
 
 **Tasks:** OpenTelemetry traces (traceId through outbox); B6 metrics; `/metrics` internal; Grafana dashboards (Payments, ABA, Machines, Outcomes/Acks, Queues/Outbox/Sweeps, Refunds, Infrastructure); alert rules → Telegram ops; Sentry releases.
 
 **Definition of Done**
 - [ ] One payment followed in a single trace
 - [ ] All Deployment §10 alerts tested by simulation
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1244,21 +1407,24 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** grow the Phase 3.5 environment into the full Deployment-doc layout with one-click releases.
 **Implements:** Deployment §1–§8, §13.
+**Needs before starting:** Phase 8 done; `[HUMAN]` staging VPS, EMQX `wrm-staging`, GitHub Environments with secrets, GHCR access, backup storage.
+**Read before starting:** Phase 8 handoff note; Deployment §1–§8, §13; Plan B5; `infra/` files from Phase 3.5.
 
 **Tasks**
 1. Dockerfiles (multi-stage, non-root, healthchecks): one api image (`RUN_MODE`), dashboard.
 2. `docker-compose.prod.yml`: caddy, api ×2 (`RUN_MODE=api`), worker (`RUN_MODE=worker`), dashboard, redis (AOF), otel agent.
-3. Staging VPS + EMQX `wrm-staging` + ABA sandbox (`RUN_MODE=all`).
+3. `[HUMAN]` (agent writes config) Staging VPS + EMQX `wrm-staging` + ABA sandbox (`RUN_MODE=all`).
 4. Server hardening; per-device EMQX credentials + ACL; separate backend user.
 5. `deploy.yml`: build → GHCR → staging (migrate via `DIRECT_DATABASE_URL`, rolling, smoke) → manual approval → production (backup, migrate, rolling, health, auto-rollback).
-6. Secrets in GitHub Environments; backups + monthly restore drill.
+6. `[HUMAN]` Secrets in GitHub Environments; backups + monthly restore drill (agent writes the scripts).
 7. Verify connection budget (B5) under load; ADR-0011 revisited (PgBouncer only if needed).
 
 **Tests:** broken image → automatic rollback; restore drill; Redis loss in staging → sweeps recover; zero dropped MQTT messages during rolling deploy.
 
 **Definition of Done**
 - [ ] Merge to `main` → staging automatically; production after approval
-- [ ] Restore drill passed; connection count within budget at 10× load
+- [ ] `[MANUAL CHECK]` Restore drill passed; connection count within budget at 10× load
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1266,20 +1432,23 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** prove the system under load and failure; decide go-live using pilot evidence.
 **Implements:** Architecture §10.6; Deployment §14.
+**Needs before starting:** Phase 9 done; pilot running ≥ 8 weeks; ESP32 + STM32 rig for chaos tests; ABA live account.
+**Read before starting:** Phase 9 handoff note; Architecture §10.6; Deployment §14; pilot log; Plan A (system invariants), B7.
 
 **Tasks**
 1. Load: k6 (API/dashboard), emqtt-bench (1,000 simulated machines), mock ABA with latency + 429.
 2. Chaos: kill api/worker; flush Redis; ESP32 offline during/after dispense; ABA outage; UART unplugged mid-dispense (pump stops); STM32 reboot with queued outcome; callback endpoint down (reconcile must find payments).
 3. Security: dependency audit, image scan, RBAC review, MQTT ACL test, secrets rotation drill.
 4. Remove legacy payload support once all machines run firmware ≥ v0.5.
-5. ABA live account confirmed; KHR/USD enabled; IP whitelisted; refund mode decided (ADR-0008).
-6. Pilot review (≥ 8 weeks of data): uptime, refund cases, unknown outcomes, accuracy, customer issues.
+5. `[HUMAN]` ABA live account confirmed; KHR/USD enabled; IP whitelisted; refund mode decided (ADR-0008).
+6. `[HUMAN]` Pilot review (≥ 8 weeks of data; agent prepares the report queries): uptime, refund cases, unknown outcomes, accuracy, customer issues.
 
 **Pass criteria:** at 10× expected peak — QR < 2 s, PAID < 3 s; **zero** lost or duplicate payments; **zero** refunds while outcome unknown; every chaos scenario recovers automatically; pilot uptime ≥ 98 %.
 
 **Definition of Done**
 - [ ] Deployment §14 checklist fully checked
-- [ ] Go-live decision recorded with pilot report
+- [ ] `[MANUAL CHECK]` Go-live decision recorded with pilot report
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -1287,11 +1456,14 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Goal:** update ESP32 and STM32 firmware remotely and safely.
 **Implements:** Deployment §9.
+**Needs before starting:** Phase 10 done (go-live); `[HUMAN]` R2 bucket; `[HARDWARE]` STM32 UART bootloader support.
+**Read before starting:** Phase 10 handoff note; Deployment §9; Plan C2 (`ota/*` reserved), C3; `firmware/esp32-gateway/src/main.cpp`; STM32 bootloader notes from the hardware developer.
 
 **Tasks:** contracts `ota/offer` (version, url, sha256, size, target), `ota/progress`, `ota/result`; firmware registry (R2, signed URLs, SHA-256), staged rollout (canary → 10 % → 100 %), pause/abort, dashboard page; ESP32 signed images + dual partitions + rollback, update only when no open payment and `pending_outcomes = 0`; STM32 flashed by the ESP32 via UART bootloader with checksum and fallback.
 
 **Definition of Done**
-- [ ] Canary rollout and automatic rollback demonstrated for both chips
+- [ ] `[MANUAL CHECK]` Canary rollout and automatic rollback demonstrated for both chips
+- [ ] `PROGRESS.md` updated with handoff note
 
 ---
 
