@@ -1,39 +1,53 @@
-# ESP32-S3 GPIO Pin Mapping
+# Pin Mapping (STM32 + ESP32)
 
-## 1. GPIO Allocation Matrix
+> 📝 **Draft for the hardware developer to confirm.** All sensors, the LCD, the buttons, the pump and the valves connect to the **STM32**. The **ESP32 only uses UART2** to talk to the STM32. STM32 pin numbers are **TBD** until the board model is chosen.
+>
+> *The filename stays `esp32-pin-mapping.md` so existing links keep working.*
 
-The **ESP32-S3** provides 45 physical GPIO pins. The pin assignments below avoid internal boot strapping pins (GPIO 0, 45, 46) and dedicate hardware buses for high-speed SPI display rendering and responsive interrupt-driven flow counting.
+## 1. ESP32 WROOM-32 (Gateway): Final
 
-| Function Group | Peripheral | Signal Name | ESP32-S3 GPIO | Electrical Level | Notes |
-|---|---|---|---|---|---|
-| **Display (SPI)** | 2.8" ILI9341 TFT | SCK (Clock) | **GPIO 12** | 3.3V Logic | Shared Hardware SPI2 (FSPI) |
-| | | MOSI (Data) | **GPIO 11** | 3.3V Logic | Shared Hardware SPI2 |
-| | | MISO (Data In) | **GPIO 13** | 3.3V Logic | Shared Hardware SPI2 |
-| | | TFT_CS (Chip Select) | **GPIO 10** | 3.3V Logic | Active LOW |
-| | | TFT_DC (Data/Cmd) | **GPIO 9** | 3.3V Logic | LOW = Cmd, HIGH = Data |
-| | | TFT_RST (Reset) | **GPIO 46** | 3.3V Logic | Active LOW (or tie to EN) |
-| | | TFT_BL (Backlight) | **GPIO 48** | 3.3V PWM | PWM dimming support |
-| **Touch Controller** | XPT2046 Resistive | T_CS (Touch Select) | **GPIO 14** | 3.3V Logic | Active LOW |
-| | | T_IRQ (Touch Interrupt)| **GPIO 21** | 3.3V Logic | Falling-edge interrupt |
-| **Weight Sensor** | HX711 24-bit ADC | DOUT (Data) | **GPIO 17** | 3.3V Logic | Input |
-| | | SCK (Clock) | **GPIO 18** | 3.3V Logic | 24–27 clock pulse output |
-| **Flow Sensor** | YF-S201 Hall Effect| FLOW_PULSE | **GPIO 4** | 3.3V Logic | Hardware interrupt (rising edge) |
-| **Cellular (UART)** | SIM7600 4G LTE | TX (ESP32 $\rightarrow$ SIM)| **GPIO 43** | 3.3V Logic | Hardware UART1 (115200 baud) |
-| | | RX (SIM $\rightarrow$ ESP32)| **GPIO 44** | 3.3V Logic | Hardware UART1 |
-| | | SIM_PWRKEY | **GPIO 47** | 3.3V Logic | Pulse LOW 1.5s to toggle power |
-| **Tank Level** | Triple Float Switch | FLOAT_HIGH | **GPIO 35** | 3.3V Logic | Internal pull-up, LOW when submerged |
-| | | FLOAT_MID | **GPIO 36** | 3.3V Logic | Internal pull-up, LOW when submerged |
-| | | FLOAT_LOW | **GPIO 37** | 3.3V Logic | Internal pull-up, LOW when submerged |
-| **Actuation** | Relay / MOSFET 1 | PUMP_RELAY | **GPIO 5** | 3.3V $\rightarrow$ 12V Driver | Active HIGH: Energizes 12V water pump |
-| | Relay / MOSFET 2 | VALVE_FAST | **GPIO 6** | 3.3V $\rightarrow$ 12V Driver | Active HIGH: Opens fast solenoid valve |
-| | Relay / MOSFET 3 | VALVE_SLOW | **GPIO 7** | 3.3V $\rightarrow$ 12V Driver | Active HIGH: Opens slow solenoid valve |
-| **Status LEDs** | Front Panel LEDs | LED_RED | **GPIO 1** | 3.3V (20mA via $220\Omega$)| HIGH = Waiting / Fault / No Bottle |
-| | | LED_GREEN | **GPIO 2** | 3.3V (20mA via $220\Omega$)| HIGH = Bottle Ready / Dispensing |
+| Function | ESP32 pin | Connects to | Notes |
+|---|---|---|---|
+| UART2 TX | **GPIO17** | STM32 USART RX | ESP32 → STM32 |
+| UART2 RX | **GPIO16** | STM32 USART TX | STM32 → ESP32 |
+| Ground | **GND** | STM32 GND | **Common ground required** |
+| USB | Micro-USB | PC | Flashing + serial monitor (test menu) |
+| Power | 5V / VIN | 5 V rail | Or USB during development |
+
+UART settings: **115200 baud, 8N1**, one text line per message ending with `\n` (Implementation Plan §C3). Both boards use 3.3 V logic, so no level shifter is needed.
 
 ---
 
-## 2. Design Rules & Pin Constraints
-1. **Flow Sensor Voltage**: The YF-S201 operates at 5V. Its signal line requires a resistive voltage divider ($1\text{k}\Omega / 2\text{k}\Omega$) or logic-level shifter before entering **GPIO 4** to prevent 5V overvoltage on the ESP32.
-2. **Strapping Pins**: Avoid using GPIO 0 for runtime inputs (it pulls to boot mode during reset).
-3. **Internal Pull-Ups**: Pins GPIO 35, 36, and 37 utilize the ESP32 internal pull-up resistors for the mechanical float switches.
+## 2. STM32 (Machine Controller): Signals to Assign
 
+The hardware developer fills in the **STM32 pin** column after choosing the board.
+
+| Group | Peripheral | Signal | STM32 pin | Type needed | Notes |
+|---|---|---|---|---|---|
+| **ESP32 link** | USART (e.g. USART2) | TX → ESP32 GPIO16 | TBD | USART TX | 115200 8N1 |
+| | | RX ← ESP32 GPIO17 | TBD | USART RX | Use interrupt/DMA; line buffer ≥ 512 bytes (QR line ~300 chars) |
+| **Display (SPI)** | ILI9341 TFT | SCK | TBD | SPI SCK | |
+| | | MOSI | TBD | SPI MOSI | |
+| | | MISO | TBD | SPI MISO | Only if reading the display/touch |
+| | | CS | TBD | GPIO out | Active LOW |
+| | | DC | TBD | GPIO out | LOW = command, HIGH = data |
+| | | RST | TBD | GPIO out | Active LOW |
+| | | Backlight | TBD | PWM / GPIO | |
+| **Touch (optional)** | XPT2046 | T_CS, T_IRQ | TBD | GPIO | Only if touch is used instead of buttons |
+| **Buttons** | Push buttons | BTN_500, BTN_750, BTN_1000, BTN_CANCEL | TBD | GPIO in, pull-up | Debounce in firmware |
+| **Weight** | HX711 | DOUT | TBD | GPIO in | |
+| | | SCK | TBD | GPIO out | |
+| **Flow** | YF-S201 | FLOW_PULSE | TBD | **Timer input capture or EXTI** | 5 V signal: use divider or a 5 V-tolerant (FT) pin |
+| **Tank level** | Float switches | FLOAT_HIGH, FLOAT_MID, FLOAT_LOW | TBD | GPIO in, pull-up | LOW when submerged |
+| **Actuators** | MOSFET drivers | PUMP, VALVE_FAST, VALVE_SLOW | TBD | GPIO out | Active HIGH; **must default LOW at reset** (pump off, valves closed) |
+| **Indicators** | LEDs, buzzer | LED_RED, LED_GREEN, BUZZER | TBD | GPIO out / PWM | 220 Ω on LEDs |
+| **Debug** | SWD + optional UART | SWDIO, SWCLK | Fixed by board | | For Keil flashing/debug |
+
+---
+
+## 3. Design Rules
+1. **Safe at reset:** pump and valve pins must be LOW (off) during reset and boot. Add pull-down resistors on the MOSFET gates.
+2. **Flow sensor voltage:** the YF-S201 runs on 5 V. Feed its signal through a 1 kΩ / 2 kΩ divider, or use a 5 V-tolerant STM32 pin.
+3. **Flow counting:** use a timer input capture or an external interrupt so no pulses are lost while the LCD is drawing.
+4. **UART receive:** use an interrupt or DMA with a ring buffer. A QR line is about 300 characters.
+5. **Common ground:** STM32, ESP32, sensors and the 12 V driver ground meet at one point (see [circuit-and-wiring.md](circuit-and-wiring.md)).

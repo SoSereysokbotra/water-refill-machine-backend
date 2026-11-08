@@ -1,38 +1,65 @@
 # Operations, Maintenance & Troubleshooting
 
-## 1. Tank Refill Standard Operating Procedure (SOP)
+> For operators and technicians. Machine status, alerts and refunds are on the **admin dashboard** (from Phase 7; before that, the backend developer checks them). Alerts arrive on **Telegram** (from Phase 5).
 
-1. **Safety First**: Unlock the lower service door using the operator physical key.
-2. **Sanitize Hands & Inlet**: Wipe the tank refill port with food-grade alcohol wipe ($70\%$ isopropyl / ethanol).
-3. **Connect Clean Supply**: Attach sanitized refill hose from bulk purified water source to the quick-connect refill port.
-4. **Monitor Level Indicator**:
-   - As water enters, observe the status LEDs or technician display screen.
-   - When the **High Float Switch** trips ($60\text{ Liters}$), an audible beep will sound and the pump fill cutoff indicator will turn solid green.
-5. **Secure & Seal**: Disconnect the hose, securely fasten the dust cap on the inlet port, and relock the stainless steel cabinet door.
-6. **Reset Status**: Touch "Refill Completed" on the technician UI screen to clear any low-water warnings in the cloud database.
+## 1. Tank Refill Procedure
 
----
-
-## 2. Routine Maintenance Schedule
-
-| Interval | Component | Maintenance Procedure |
-|---|---|---|
-| **Weekly** | Exterior & Deck | Wipe stainless steel exterior with food-grade stainless cleaner. Empty and clean the drip tray. |
-| **Bi-Weekly** | Nozzle & Alcove | Sanitize dispense nozzle with food-safe sanitizing solution. Inspect aerator mesh for scale build-up. |
-| **Monthly** | Sensor Calibration | Run a test 1.0L dispense into a graduated cylinder. If deviation $> 15\text{ ml}$, run the calibration routine. |
-| **Quarterly** | Inline Pre-Filter | Unscrew 50-mesh stainless pre-filter, rinse sediment, and inspect O-ring seal. |
-| **Annually** | Tubing & Diaphragm | Inspect internal silicone tubes for discoloration/hardening. Replace diaphragm pump if flow drops $< 2.5\text{ L/min}$. |
+1. **Alert:** the backend sends "Tank low" (Mid float) or "Tank empty" (Low float, machine locked).
+2. **Open:** unlock the lower service door with the key.
+3. **Sanitise:** wipe the refill inlet with a 70 % alcohol wipe.
+4. **Fill:** connect the clean hose from the purified water source to the quick-connect inlet. Fill until the **High float** is reached (60 L).
+5. **Close:** disconnect the hose, refit the dust cap, lock the door.
+6. **Automatic recovery:** once the Low and Mid floats stay submerged for 5 s, the STM32 clears "Out of Service" by itself, the backend resolves the alert, and the machine returns to the Welcome screen.
 
 ---
 
-## 3. Field Troubleshooting Guide
+## 2. Maintenance Schedule
 
-| Symptom / Error | Probable Cause | Diagnostic & Resolution Steps |
+| Interval | Component | Procedure |
 |---|---|---|
-| **TFT screen stays dark** | Power supply failure or disconnected 5V cable | 1. Check AC mains input plug.<br>2. Measure PSU output with DMM (should be $+12.0\text{V}$).<br>3. Verify LM2596 buck converter outputs $+5.0\text{V}$ to ESP32 board. |
-| **Red LED on / Won't dispense** | Bottle not detected by load cell | 1. Ensure bottle is centered on the platform.<br>2. Check HX711 wiring (GPIO 17/18).<br>3. Check if empty bottle weight is $< 20\text{g}$ threshold. |
-| **Water volume is inaccurate** | Flow sensor or load cell out of calibration | 1. Inspect YF-S201 rotor for debris or limescale.<br>2. Recalibrate HX711 scale factor using a certified weight.<br>3. Verify supply tube is not kinked or restricted. |
-| **Pump runs but no water flows** | Tank empty or pump lost prime | 1. Verify water level inside 60L tank ($> 5\text{L}$).<br>2. Inspect check valve orientation (arrow must point towards nozzle).<br>3. Check if pre-filter is clogged with sediment. |
-| **4G Cellular disconnected** | SIM card expired or antenna detached | 1. Verify SIM card has active data package.<br>2. Check SMA antenna connection on SIM7600 module.<br>3. Check SIM7600 NETLIGHT status LED (blinking every 3s = registered to 4G). |
-| **Payment not confirming** | Webhook network delay or gateway timeout | 1. Check cellular signal RSSI on diagnostic screen.<br>2. Confirm customer banking transaction succeeded.<br>3. If persistent, reboot ESP32 via rear service button. |
+| **Weekly** | Exterior & deck | Clean the stainless exterior; empty and clean the drip tray. |
+| **Bi-weekly** | Nozzle & alcove | Sanitise the nozzle; check the aerator mesh for scale. |
+| **Monthly** | Calibration | Dispense 1.0 L into a measuring cylinder. More than 15 mL off → recalibrate ([calibration guide](../03-Firmware-Control/calibration-guide.md)). |
+| **Quarterly** | Pre-filter, tank | Rinse the 50-mesh pre-filter, check the O-ring; clean the tank via the inspection port. |
+| **Annually** | Tubing & pump | Replace hard or discoloured tubing; replace the pump if flow < 2.5 L/min. |
 
+---
+
+## 3. Troubleshooting
+
+### 3.1 Machine & hardware
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| **Screen dark** | Power problem | Check the AC plug and fuse. PSU output should be 12.0 V; buck output 5.0 V to both boards. |
+| **"Out of Service: tank empty"** | Low float open | Refill the tank (§1). |
+| **Won't dispense after payment ("Place your bottle" stays)** | Bottle not detected | Centre the bottle; empty bottles under 20 g aren't detected; check the HX711 wiring. After 60 s the machine gives up (`BOTTLE_TIMEOUT`) and the payment goes to refund review. |
+| **Volume wrong** | Calibration or dirty flow sensor | Clean the YF-S201 rotor; recalibrate the scale and flow. Repeated "accuracy mismatch" alerts point to this. |
+| **Pump runs, no water (`NO_FLOW`)** | Tank empty, pump lost prime, filter clogged | Check the water level, check-valve direction (arrow to nozzle), clean the pre-filter, prime the pump in maintenance mode. |
+| **Stops mid-fill (`BOTTLE_REMOVED`)** | Bottle moved or tipped | Normal safety stop; the partial amount goes to refund review. |
+
+### 3.2 Network & payment
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| **Screen shows "Offline"** | Wi-Fi down, broker unreachable, or ESP32 ↔ STM32 link broken | Check the site Wi-Fi (2.4 GHz). On the dashboard, is the machine offline? Power-cycle the machine. Check the 3 UART wires (TX→RX, RX→TX, GND). |
+| **"Service unavailable" after pressing a button** | Backend or ABA not reachable | Check backend health; try again in a minute. Nobody was charged. |
+| **Weak Wi-Fi (RSSI worse than −75 dBm in heartbeat)** | Metal enclosure blocks signal | Move the antenna or router; use an external-antenna ESP32 ([enclosure](../05-Mechanical-and-Plumbing/enclosure-and-tank.md)). |
+| **Customer paid, no water** | Expired QR paid late, bottle timeout, fault | Find the payment on the dashboard (by time or `tran_id`). It's in the **refund queue**: claim it, refund via the ABA portal or cash, record the reference. |
+| **Payment shows `DISPENSE_UNKNOWN`** | Machine was offline after payment | **Don't refund yet.** Wait for the machine to reconnect; it resends the saved result. After 24 h online with no result, the case moves to refund review. |
+| **Machine offline alert** | Power cut or network | Visit the site if it doesn't recover within an hour. |
+
+### 3.3 Fault codes (shown on screen and on the dashboard)
+
+| Code | Meaning |
+|---|---|
+| `TANK_EMPTY` / `TANK_LOW` | Refill the tank |
+| `NO_FLOW` | Pump on but no water |
+| `OVERFLOW` | Filled more than target + 10 %, so it stopped |
+| `BOTTLE_REMOVED` / `BOTTLE_TIMEOUT` | Customer action, safe stop |
+| `DISPENSE_TIMEOUT` | Fill took over 60 s |
+| `LOADCELL_FAULT` / `FLOW_SENSOR_FAULT` | Check sensor wiring, then recalibrate |
+| `VALVE_FAULT` / `PUMP_FAULT` | Check the driver board, diode and coil |
+| `POWER_LOSS_RECOVERY` | Power was cut during a fill |
+
+Full list: Implementation Plan §C8.

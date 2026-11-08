@@ -1,32 +1,38 @@
 # Bill of Materials (BOM)
 
-## 1. Raw Materials & Component List
+> 📝 **Draft for the hardware developer to confirm.** Items marked **TBD** (STM32 board model, prices) must be filled in by the hardware developer.
 
-The table below lists all 14 core components required to build one complete unit of the IoT Water Refill Vending Machine:
+## 1. Component List (one machine)
 
-| Item # | Component | Model / Specs | Purpose | Qty | Est. Unit Price (USD) | Total (USD) | Recommended Supplier |
+| # | Component | Model / Specs | Purpose | Qty | Est. Unit Price (USD) | Total (USD) | Supplier |
 |---|---|---|---|---|---|---|---|
-| **1** | Main Microcontroller | **ESP32-S3 DevKitC-1** (N8R8, 8MB Flash / 8MB PSRAM) | System brain, UI control, sensing, logic | 1 | $8.50 | $8.50 | Espressif / Digikey |
-| **2** | Display & Touchscreen | **2.8" SPI TFT LCD (ILI9341)** + Touch (XPT2046) | Customer UI, volume selection & progress | 1 | $12.00 | $12.00 | Waveshare / AliExpress |
-| **3** | Cellular Module | **SIMCom SIM7600E / SIM7600G** 4G LTE Breakout | Network connectivity, payment & telemetry | 1 | $26.00 | $26.00 | SIMCom / Waveshare |
-| **4** | Flow Sensor | **YF-S201** Hall Effect (1/2" Male Thread, 1–30 L/min) | In-line volumetric flow measurement | 1 | $3.50 | $3.50 | Generic Industrial |
-| **5** | Weight Sensor & ADC | **5kg Load Cell Bar** + **HX711 24-bit ADC Module** | Bottle detection, tare, and final weight check | 1 | $5.00 | $5.00 | SparkFun / Generic |
-| **6** | Water Pump | **12V DC Diaphragm Pump** (3–4 L/min, 0.48 MPa, 35W) | Draws water from tank to nozzle | 1 | $9.50 | $9.50 | Generic Marine/RV |
-| **7** | Solenoid Valve (Fast) | **12V DC Normally Closed Solenoid** (1/2", high flow) | Primary bulk water flow control (~90% target) | 1 | $6.50 | $6.50 | Generic Automation |
-| **8** | Solenoid Valve (Slow) | **12V DC Normally Closed Solenoid** (1/4" or restricted) | Precision finish flow control (~10% topping) | 1 | $6.50 | $6.50 | Generic Automation |
-| **9** | Tank Level Sensor | **Triple Float Switch Assembly** (High, Mid, Low) | 60L reservoir level detection | 1 | $4.00 | $4.00 | Generic Industrial |
-| **10** | Status Indicators | **Dual LED Indicators** (Red / Green, panel mount, 12mm) | Bottle placement & machine status signaling | 2 | $0.75 | $1.50 | Generic Electronics |
-| **11** | Power Supply Unit | **Mean Well LRS-100-12** (12V DC, 8.5A, 100W) | Main AC mains to 12V DC conversion | 1 | $14.00 | $14.00 | Mean Well / Mouser |
-| **12** | Driver Board | **4-Channel Relay Module / Optocoupled MOSFET Driver** | Safe 12V power switching for pump & valves | 1 | $4.50 | $4.50 | Generic Electronics |
-| **13** | Plumbing & Fittings | Food-Grade 1/2" PE/Silicone tubing, quick-connects, check valve | Fluid piping from tank to dispense nozzle | 1 set | $16.00 | $16.00 | Local Plumbing Supply |
-| **14** | Enclosure | **Custom 304 Stainless Steel Cabinet** (with lock & drip tray) | Weather-resistant, hygienic body | 1 | $85.00 | $85.00 | Local Sheet Metal Fabricator |
-| **Total** | | | | | | **~$198.00** | *(Per prototype unit)* |
+| **1** | Machine controller | **STM32 board**, model **TBD** (needs: 1 SPI, 2 UART, timer input, ~15 GPIO, flash for settings) | Screens, sensors, pump, valves, safety | 1 | TBD | TBD | TBD |
+| **2** | Network gateway | **ESP32 WROOM-32 DevKit** (4 MB flash) | Wi-Fi + MQTT to the cloud, UART bridge | 1 | $5.00 | $5.00 | Espressif / AliExpress |
+| **3** | Display | **2.8" SPI TFT LCD (ILI9341)** (touch XPT2046 optional) | Customer screens and KHQR | 1 | $12.00 | $12.00 | Waveshare / AliExpress |
+| **4** | Buttons | Panel-mount push buttons (500 / 750 / 1000 mL + Cancel) | Volume selection | 4 | $0.80 | $3.20 | Generic |
+| **5** | Flow sensor | **YF-S201** Hall effect (1/2", 1–30 L/min) | Volume measurement | 1 | $3.50 | $3.50 | Generic industrial |
+| **6** | Weight sensor | **5 kg load cell** + **HX711 24-bit ADC** | Bottle detection, tare, weight check | 1 | $5.00 | $5.00 | SparkFun / generic |
+| **7** | Water pump | **12 V DC diaphragm pump** (3–4 L/min, 35 W) | Pushes water to the nozzle | 1 | $9.50 | $9.50 | Generic marine/RV |
+| **8** | Fast valve | **12 V DC normally-closed solenoid** (1/2", high flow) | Bulk fill (to 90 %) | 1 | $6.50 | $6.50 | Generic |
+| **9** | Slow valve | **12 V DC normally-closed solenoid** (1/4" or restricted) | Precise finish (90–100 %) | 1 | $6.50 | $6.50 | Generic |
+| **10** | Tank level | **Triple float switch** (High / Mid / Low) | 60 L tank level | 1 | $4.00 | $4.00 | Generic industrial |
+| **11** | Indicators | Red / Green panel LEDs (12 mm) + piezo buzzer | Status and sounds | 1 set | $2.00 | $2.00 | Generic |
+| **12** | Power supply | **Mean Well LRS-100-12** (12 V, 8.5 A) | AC → 12 V | 1 | $14.00 | $14.00 | Mean Well / Mouser |
+| **13** | Driver board | Logic-level MOSFET driver (IRLZ44N) ×3, or opto relay module | Switch 12 V pump and valves | 1 | $4.50 | $4.50 | Generic |
+| **14** | Plumbing | Food-grade 1/2" silicone/PE tubing, fittings, check valve, pre-filter | Tank → pump → valves → nozzle | 1 set | $16.00 | $16.00 | Local plumbing |
+| **15** | Enclosure | **304 stainless steel cabinet** (lock, drip tray) | Hygienic body | 1 | $85.00 | $85.00 | Local fabricator |
+| **Total** | | | | | | **~$177 + STM32 board** | *(prototype)* |
+
+Removed from the old design: **ESP32-S3** (replaced by STM32 + ESP32 WROOM-32) and **SIM7600 4G module** (the pilot uses Wi-Fi).
+
+**Optional, later:** a 4G module (SIM7600 / A7670) on the ESP32 for sites without Wi-Fi, about $20–26.
 
 ---
 
-## 2. Supporting Consumables & Fasteners
-- DC-DC Step-Down Buck Converter (12V to 5V, 3A) for ESP32 and logic peripherals.
-- Fuse holder & 5A fast-blow inline fuse on the 12V rail.
-- M3/M4 stainless steel screws, standoffs, and nylon washers for mounting PCB boards.
-- Cable glands (PG7 / PG9) for liquid-tight wire pass-throughs between compartments.
-
+## 2. Supporting Parts
+- DC-DC buck converter, 12 V → 5 V, 3 A (LM2596), for both MCU boards and the flow sensor.
+- Fuse holder + 5 A fast-blow fuse on the 12 V rail.
+- Flyback diodes (1N4007 / 1N5819) for the pump and both valves.
+- Resistors for the flow-sensor signal divider (1 kΩ / 2 kΩ) and pull-up (4.7 kΩ).
+- 3 short wires for STM32 ↔ ESP32 UART (TX, RX, GND).
+- M3/M4 stainless screws, standoffs, nylon washers; PG7/PG9 cable glands.

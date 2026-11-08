@@ -1,48 +1,57 @@
 # Enclosure & Water Tank Specifications
 
+> 📝 **Draft for the hardware developer to confirm** (electronics bay layout and Wi-Fi antenna position).
+
 ## 1. Enclosure Design & Dimensions
 
-The machine body is fabricated from **1.2 mm thick food-grade 304 Stainless Steel** (brushed finish) to resist corrosion, rust, and outdoor moisture:
+The body is **1.2 mm food-grade 304 stainless steel** (brushed) to resist rust and moisture.
 
 ### Physical Dimensions
-- **Width**: $400\text{ mm}$
-- **Depth**: $350\text{ mm}$
-- **Total Height**: $1200\text{ mm}$ (free-standing countertop or floor station)
+- **Width:** 400 mm
+- **Depth:** 350 mm
+- **Height:** 1200 mm (floor station)
 
 ```text
 ┌───────────────────────────────────────┐  ▲
-│  [2.8" TFT DISPLAY]    [QR CODE AREA] │  │
-│                                       │  │ TOP SECTION (User Deck)
-│  (•) RED LED         (•) GREEN LED    │  │ • Dispensing alcove (H: 320mm)
-│                                       │  │ • Nozzle assembly
-│             ┌───────┐                 │  │ • Load cell bottle platform
-│             │NOZZLE │                 │  │
-│             └───┬───┘                 │  │
-│                 │                     │  │
+│  [2.8" LCD: screens + KHQR]           │  │
+│  [500] [750] [1000] [CANCEL] buttons  │  │ TOP SECTION (User Deck)
+│  (•) RED LED         (•) GREEN LED    │  │ • Dispensing alcove (H: 320 mm)
+│             ┌───────┐                 │  │ • Nozzle assembly
+│             │NOZZLE │                 │  │ • Load cell bottle platform
+│             └───┬───┘                 │  │ • Drip tray
 │              [BOTTLE]                 │  │
 │           ┌───────────┐               │  │
 │           │ LOAD CELL │               │  │
 ├───────────┴───────────┴───────────────┤  ▼
 │    MIDDLE SECTION (Electronics Bay)   │  ▲
-│  • ESP32-S3 PCB Board                 │  │ Compartment sealed from moisture
-│  • SIM7600 4G Module & Antenna        │  │ Mean Well 12V PSU & Buck converter
-│  • Relay / MOSFET Actuator Driver     │  │
+│  • STM32 board (machine controller)   │  │ Sealed from water and moisture
+│  • ESP32 WROOM-32 (Wi-Fi gateway)     │  │ Mean Well 12 V PSU + 5 V buck
+│  • MOSFET driver board, fuse          │  │ Cable glands between sections
+│  • Wi-Fi antenna: see note below      │  │
 ├───────────────────────────────────────┤  ▼
 │     BOTTOM SECTION (Reservoir Bay)    │  ▲
-│  • 60L Water Tank (HDPE / Stainless)  │  │ Lockable front service door
-│  • 12V DC Diaphragm Water Pump        │  │ Quick-disconnect refill inlet
-│  • Fast & Slow Solenoid Valves        │  │ Drain valve at base
-│  • Triple Float Switch Probe          │  │
+│  • 60 L water tank                    │  │ Lockable front service door
+│  • 12 V diaphragm pump, pre-filter    │  │ Quick-disconnect refill inlet
+│  • Fast & slow solenoid valves        │  │ Drain valve at the base
+│  • Flow sensor, triple float switch   │  │
 └───────────────────────────────────────┘  ▼
 ```
+
+### Wi-Fi Antenna (important)
+Stainless steel blocks Wi-Fi. Choose one:
+- Mount the ESP32 behind a **plastic window** (e.g. near the LCD bezel), or
+- Use an ESP32 board with an **external antenna connector** (WROOM-32U) and mount the antenna outside or on top.
+
+Test the signal (RSSI in the heartbeat) with the door closed. Aim for **better than −70 dBm**.
 
 ---
 
 ## 2. 60-Liter Water Reservoir
 
-- **Material**: Heavy-duty, UV-stabilized food-grade HDPE (High-Density Polyethylene) or 304 Stainless Steel.
-- **Capacity**: $60\text{ Liters}$ (equivalent to $120 \times 0.5\text{L}$ refills or $60 \times 1.0\text{L}$ refills per tank refill cycle).
-- **Float Switch Ports**: 3 vertical tapped ports for the Low (5L), Mid (30L), and High (60L) float switches.
-- **Venting**: 0.2 micron hydrophobic air vent cap at the top to prevent tank vacuum during pumping while preventing airborne dust/contaminant ingress.
-- **Cleaning Access**: $150\text{ mm}$ threaded top inspection port for quarterly descaling and sanitization.
-
+- **Material:** UV-stabilised food-grade HDPE or 304 stainless steel.
+- **Capacity:** 60 L (≈ 120 × 0.5 L or 60 × 1.0 L refills per fill).
+- **Float switches:** 3 ports for **Low (5 L)**, **Mid (30 L)** and **High (60 L)**.
+  - Low = dispensing locked.
+  - Mid = "tank low" warning sent to the backend.
+- **Vent:** 0.2 µm hydrophobic vent cap, so there's no vacuum when pumping and no dust inside.
+- **Cleaning access:** 150 mm threaded inspection port for quarterly cleaning.

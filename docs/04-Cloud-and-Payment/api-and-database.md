@@ -1,117 +1,89 @@
-# Cloud API & Database Schema
+# API & Database Summary
 
-## 1. REST API Endpoints
+> A short overview. **The full specification is in the [Implementation Plan](backend-implementation-plan.md):** database **§C6**, REST API **§C7**, MQTT **§C2**, ABA PayWay **§C10**. If this page and the plan disagree, the plan is right.
 
-The backend is hosted as a lightweight Node.js (Fastify/Express) or Python (FastAPI) service communicating with the machines over HTTPS/MQTT:
+## 1. Two Backends (for now)
 
-### 1.1 `POST /api/payment/verify`
-Checks whether a payment transaction has been confirmed by the payment gateway webhook.
-
-**Request Payload**:
-```json
-{
-  "machine_id": "WRM-001",
-  "txn_id": "TXN_20261103_00129"
-}
-```
-
-**Response (Success)**:
-```json
-{
-  "status": "PAID",
-  "amount": 2.00,
-  "currency": "THB",
-  "timestamp": "2026-11-03T08:15:22Z"
-}
-```
+| | Prototype (running today) | Production backend (being built) |
+|---|---|---|
+| Folder | `backend/` | `apps/api/` (from Phase 0) |
+| Stack | Node.js, Express, mqtt.js | NestJS 11 (Fastify), PostgreSQL 16 + Prisma, Redis + BullMQ |
+| Storage | In memory (lost on restart) | PostgreSQL |
+| Machine link | MQTT (+ old HTTP endpoints) | MQTT only |
+| Status | Used for testing; stops at Phase 2 cut-over | Phases 0–11 |
 
 ---
 
-### 1.2 `POST /api/transaction`
-Called by the ESP32-S3 over 4G LTE immediately after water dispensing completes.
+## 2. Machine ↔ Backend: MQTT (both backends)
 
-**Request Payload**:
-```json
-{
-  "machine_id": "WRM-001",
-  "txn_id": "TXN_20261103_00129",
-  "target_volume_ml": 1000,
-  "dispensed_flow_ml": 998,
-  "dispensed_weight_g": 996,
-  "duration_seconds": 24.2,
-  "dual_check_passed": true,
-  "tank_level": "HIGH",
-  "timestamp": "2026-11-03T08:16:05Z"
-}
-```
+Topics: `wrm/<machine_id>/…` on EMQX Cloud (TLS, port 8883).
 
-**Response**:
-```json
-{
-  "acknowledged": true,
-  "recorded_at": "2026-11-03T08:16:06Z"
-}
-```
+| Topic | Direction | Purpose |
+|---|---|---|
+| `pay/request` | machine → backend | Customer chose a volume |
+| `pay/qr` | backend → machine | KHQR text, amount, expiry |
+| `pay/status` | backend → machine | `paid` / `expired` / `failed` / `cancelled` |
+| `pay/cancel` | machine → backend | Customer pressed Cancel |
+| `transaction` | machine → backend | Dispense result (flow, weight, fault) |
+| `transaction/ack` | backend → machine | Result stored (production backend) |
+| `heartbeat` | machine → backend | Health every 60 s |
+| `error` | machine → backend | Fault codes |
+| `online` | machine → backend | `1` / `0` (Last Will) |
+| `config` / `config/ack` | both | Prices, currency, enabled |
+
+Payload fields: §C2.
 
 ---
 
-### 1.3 `POST /api/machine/:id/alert`
-Emergency endpoint invoked whenever a critical hardware failure occurs.
+## 3. REST API
 
-**Request Payload**:
-```json
-{
-  "machine_id": "WRM-001",
-  "alert_type": "LOW_WATER_CUTOFF",
-  "severity": "CRITICAL",
-  "message": "Reservoir water level dropped below 5L threshold. Dispenser locked.",
-  "timestamp": "2026-11-03T09:30:00Z"
-}
-```
+### 3.1 Prototype (`backend/`, today)
+| Method & path | Purpose |
+|---|---|
+| `POST /api/payment/create` | Create a payment (header `X-API-Key`) |
+| `GET /api/payment/status/:tranId` | Payment status (also syncs with ABA) |
+| `POST /api/payment/callback` | ABA callback (re-checked with ABA) |
+| `POST /api/dev/pay/:tranId` | Simulate payment (mock mode only) |
+| `GET /dev` | Test page: latest payment + "Create test payment" buttons |
+| `GET /health` | Health + MQTT state |
+
+### 3.2 Production (`/v1`, by phase)
+| Area | Main endpoints | Phase |
+|---|---|---|
+| Health | `/health/live`, `/health/ready` | 1 |
+| Payments | `POST /v1/payway/callback`, `GET /v1/payments/:tranId` | 2 |
+| Refunds | `/v1/refund-cases` (list, claim, mark-refunded, reject, reopen) | 3 |
+| Machines | `/v1/machines` (provision, prices, enable/disable, credentials) | 4 |
+| Alerts | `/v1/alerts` | 5 |
+| Auth & users | `/v1/auth/*`, `/v1/users` | 6 |
+| Reports | `/v1/reports/sales`, `/v1/reports/machines/status` | 7 |
+
+Full table with roles: §C7.
 
 ---
 
-## 2. PostgreSQL Relational Database Schema
+## 4. Database (production, PostgreSQL)
 
-```sql
--- 1. Machines Registry
-CREATE TABLE machines (
-    id VARCHAR(32) PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    location_name VARCHAR(150),
-    latitude NUMERIC(9, 6),
-    longitude NUMERIC(9, 6),
-    tank_capacity_liters INT DEFAULT 60,
-    current_tank_level VARCHAR(10) DEFAULT 'HIGH', -- 'HIGH', 'MID', 'LOW'
-    status VARCHAR(20) DEFAULT 'ONLINE',           -- 'ONLINE', 'OFFLINE', 'MAINTENANCE'
-    last_heartbeat TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
+| Table | Holds |
+|---|---|
+| `machines` | Machine ID, name, location, enabled, MQTT user, last heartbeat, STM32 state, pending results |
+| `machine_prices` | Price per volume tier (500 / 750 / 1000) and currency |
+| `payments` | `tran_id`, machine, volume, amount, currency, status, timestamps, version (optimistic lock) |
+| `payment_events` | History of every state change |
+| `dispenses` | Results: ok / partial / error, flow mL, weight g, fault |
+| `dispense_rejections` | Results that couldn't be applied (unknown payment, wrong machine) |
+| `refund_cases` | Reason, suggested and refunded amount, claim, method, reference |
+| `outbox` / `inbox` | Reliable event delivery and duplicate protection |
+| `heartbeats` | Machine health history (kept 30 days) |
+| `alerts` | Faults and incidents with severity and status |
+| `audit_logs` | Who changed what (prices, refunds, users) |
+| `users` / `sessions` | Dashboard users and roles (Phase 6) |
 
--- 2. Transactions Log
-CREATE TABLE transactions (
-    id VARCHAR(64) PRIMARY KEY,
-    machine_id VARCHAR(32) REFERENCES machines(id),
-    target_volume_ml INT NOT NULL,
-    dispensed_flow_ml INT NOT NULL,
-    dispensed_weight_g INT NOT NULL,
-    amount NUMERIC(8, 2) NOT NULL,
-    currency VARCHAR(3) DEFAULT 'THB',
-    payment_method VARCHAR(20) DEFAULT 'QR',
-    dual_check_passed BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
+Money is stored as an **integer** (`amount_minor`): USD in cents (0.15 → `15`), KHR in riel (500 → `500`).
 
--- 3. Machine Alerts & Maintenance
-CREATE TABLE alerts (
-    id SERIAL PRIMARY KEY,
-    machine_id VARCHAR(32) REFERENCES machines(id),
-    alert_type VARCHAR(50) NOT NULL,
-    severity VARCHAR(20) NOT NULL, -- 'INFO', 'WARNING', 'CRITICAL'
-    message TEXT,
-    resolved BOOLEAN DEFAULT FALSE,
-    resolved_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-);
-```
+**Key database rules:**
+- One open payment per machine.
+- `tran_id` is unique.
+- `(machine_id, request_id)` is unique (prevents duplicate payments).
 
+Full Prisma schema: §C6.

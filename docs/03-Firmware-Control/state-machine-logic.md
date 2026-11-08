@@ -1,94 +1,107 @@
-# State Machine & Dispensing Logic
+# State Machine & Dispensing Logic (STM32)
 
-## 1. System State Machine
+> 📝 **Draft for the hardware developer to confirm.** This is the **STM32** state machine. The payment states on the backend are in Implementation Plan **§C1**; UART messages are in **§C3**; fault codes are in **§C8**.
 
-The firmware runs a deterministic Finite State Machine (FSM) implemented in FreeRTOS to manage all user interactions and machine safety:
+## 1. STM32 State Machine
+
+The state names match the `PONG,<state>,…` field in §C3, so the ESP32 and the backend always know what the machine is doing.
 
 ```text
+ ┌──────────────┐  power on / self-check OK
+ │     IDLE     │◀──────────────────────────────────────────────────────┐
+ │ Welcome +    │                                                       │
+ │ prices       │── NET,DOWN / no PING 15 s ──▶ show "Offline" (stay)   │
+ └──────┬───────┘── tank LOW float open ──────▶ ERROR (TANK_EMPTY)      │
+        │ button 500 / 750 / 1000                                       │
+        │ send REQ_PAY,<ml>                                             │
+        ▼                                                               │
+ ┌──────────────┐── Cancel → send CANCEL ─────────────────────────────▶ │
+ │   WAIT_QR    │── FAILED,0 (service unavailable) ──────────────────▶ │
+ └──────┬───────┘                                                       │
+        │ QR,<tran_id>,<amount>,<cur>,<sec>,<qr_text>                   │
+        ▼                                                               │
+ ┌──────────────┐── Cancel → send CANCEL,<tran_id> ──────────────────▶ │
+ │      QR      │── EXPIRED / FAILED / CANCELLED,<tran_id> ───────────▶ │
+ │ KHQR + timer │                                                       │
+ └──────┬───────┘                                                       │
+        │ PAID,<tran_id>  (tran_id == QR shown?)                        │
+        │   yes → send PAID,ACK,<tran_id>                               │
+        │   no  → send PAID,REJECT,<tran_id>,PAID_NOT_ACCEPTED          │
+        ▼                                                               │
+ ┌──────────────┐── no bottle in 60 s ──▶ PARTIAL,<id>,0,0,BOTTLE_TIMEOUT ┤
+ │ WAIT_BOTTLE  │                                                       │
+ └──────┬───────┘                                                       │
+        │ weight > 20 g and stable → tare                               │
+        ▼                                                               │
+ ┌──────────────┐── bottle removed / tank empty / sensor fault / 60 s ─▶ │
+ │  DISPENSING  │      stop → PARTIAL,<id>,<flow>,<weight>,<fault>      │
+ │ fast → slow  │                                                       │
+ └──────┬───────┘                                                       │
+        │ target reached → stop → dual-check                            │
+        │ send DONE,<tran_id>,<flow_ml>,<weight_g>                      │
+        ▼                                                               │
+ [ "Thank you" 5 s ] ── result kept in flash, resent every 2 s until ACK,<tran_id> ┘
+
  ┌──────────────┐
- │     IDLE     │◀──────────────────────────────────────────────────┐
- └──────┬───────┘                                                   │
-        │ Customer touches screen or scans QR                       │
-        ▼                                                           │
- ┌──────────────┐                                                   │
- │ PAYMENT_WAIT │──(Timeout 90s / Cancel)──▶ [ Show Timeout ]───────┤
- └──────┬───────┘                                                   │
-        │ Payment Confirmed (Webhook / Polling)                     │
-        ▼                                                           │
- ┌──────────────┐                                                   │
- │ VOLUME_SELECT│──(User chooses 0.5L, 0.75L, or 1.0L)              │
- └──────┬───────┘                                                   │
-        ▼                                                           │
- ┌──────────────┐                                                   │
- │ BOTTLE_CHECK │◀──(Weight < 20g: Prompt placement / Red LED ON)   │
- └──────┬───────┘                                                   │
-        │ Bottle Detected (Weight >= 20g) & Tare Recorded           │
-        ▼                                                           │
- ┌──────────────┐                                                   │
- │  DISPENSING  │──(Tank Empty or Bottle Removed)──▶ [ E-STOP / ALARM ]
- └──────┬───────┘                                                   │
-        │ 90% reached: Fast Valve OFF                               │
-        │ 100% reached: Slow Valve OFF + Pump OFF                   │
-        ▼                                                           │
- ┌──────────────┐                                                   │
- │ DUAL_VERIFY  │──(Error > 5%: Log mismatch warning)               │
- └──────┬───────┘                                                   │
-        │ Done (Success Screen + Green LED Blink)                   │
-        ▼                                                           │
- ┌──────────────┐                                                   │
- │  REPORTING   │──(Send telemetry via SIM7600)─────────────────────┘
- └──────────────┘
+ │    ERROR     │  Out of Service (tank empty, pump/valve/sensor fault).
+ │              │  Sends ERR,<fault>. Returns to IDLE when the fault clears
+ └──────────────┘  (e.g. tank refilled: Low + Mid floats submerged ≥ 5 s).
 ```
 
----
-
-## 2. Two-Stage Dispensing Algorithm
-
-To combine **rapid dispensing speed** with **milliliter-level precision**, the system uses a coordinated two-stage valve actuation strategy:
-
-### Stage 1: Bulk Fast Fill (0% to 90% Target)
-- **Actuators**: Pump = `ON`, Fast Solenoid = `OPEN`, Slow Solenoid = `OPEN`.
-- **Flow Rate**: ~3.2 L/min.
-- **Duration**: Fills the bottle rapidly up to $90\%$ of the selected target volume (e.g., $450\text{ ml}$ for a $0.5\text{L}$ bottle).
-- **Monitoring**: Real-time interrupt pulse counter on YF-S201.
-
-### Stage 2: Precision Slow Finish (90% to 100% Target)
-- **Transition**: When $V_{\text{current}} \ge 0.90 \times V_{\text{target}}$, the **Fast Solenoid Valve closes immediately**.
-- **Actuators**: Pump = `ON` (or reduced duty cycle), Slow Solenoid = `OPEN`.
-- **Flow Rate**: ~0.8 L/min.
-- **Benefit**: Eliminates dynamic fluid head pressure, reduces splash, and eliminates over-dispensing inertia.
-- **Cutoff**: As soon as target volume or target weight is reached:
-  $$\text{Target Reached} \iff V_{\text{flow}} \ge V_{\text{target}} \quad\text{OR}\quad \Delta W_{\text{bottle}} \ge W_{\text{target}}$$
-  Both valves immediately snap shut and the pump is de-energized.
+**Maintenance mode** (PIN, from IDLE only) is outside the customer flow. See §5.
 
 ---
 
-## 3. Dual-Check Sensor Cross-Verification
+## 2. Two-Stage Dispensing
 
-The machine does not rely on a single sensor. It cross-validates volumetric flow against gravimetric weight:
+### Stage 1: Fast fill (0 % → 90 % of target)
+- Pump **ON**, fast valve **OPEN**, slow valve **OPEN** (about 3.2 L/min).
+- Volume from the flow-sensor pulse counter.
 
-$$\text{Dual-Check Rule:}\quad \left| V_{\text{dispensed}} (\text{ml}) - \Delta W_{\text{dispensed}} (\text{grams}) \right| \le \text{Threshold} \; (25\text{ ml/g})$$
-
-1. **At Start of Dispense**:
-   - Record initial bottle tare weight $W_0$.
-   - Reset flow interrupt pulse counter $P = 0$.
-2. **During Dispense**:
-   - In-flight volume $V = \frac{P}{K_{\text{flow}}}$.
-   - In-flight weight gain $\Delta W = W_{\text{current}} - W_0$.
-   - **Anti-Spill Safety Guard**: If during dispensing $\Delta W < 0.2 \times V$ (meaning water is flowing through the nozzle, but not accumulating on the scale), the machine triggers an **Emergency Overflow Stop** within 2 seconds (bottle tipped over or moved).
-3. **At End of Dispense**:
-   - Compare final $V_{\text{final}}$ and $\Delta W_{\text{final}}$.
-   - If within $\pm 3\%$, mark transaction as **Verified Success**.
-   - If discrepancy $> 5\%$, log a warning flag (`SENSOR_DRIFT_ALERT`) and notify the operator via 4G telemetry.
+### Stage 2: Slow finish (90 % → 100 %)
+- At **90 %**: fast valve **closes**; pump stays on, slow valve open (about 0.8 L/min).
+- Less splash, no overshoot.
+- **Stop** when **flow volume ≥ target** OR **weight gain ≥ target grams** (1 mL water ≈ 1 g): close both valves, pump off.
 
 ---
 
-## 4. Safety Interlocks & Cutoffs
+## 3. Dual-Check (Flow vs Weight)
 
-| Safety Condition | Trigger | Machine Action |
+1. **Start:** record bottle tare weight W₀; reset pulse counter.
+2. **During:** volume V = pulses ÷ K_flow; weight gain ΔW = W − W₀.
+   - **Anti-spill:** if water is flowing but the weight isn't rising (ΔW < 20 % of V after the first 50 mL), the bottle is tipped or missing. Stop within 2 s and report `BOTTLE_REMOVED`.
+3. **End:** send both values in `DONE,<tran_id>,<flow_ml>,<weight_g>`.
+   - The backend flags a **mismatch above 5 %** (AccuracyMismatch alert), and the operator checks calibration.
+   - The STM32 doesn't need to decide this.
+
+---
+
+## 4. Safety Rules (non-negotiable, Implementation Plan §C3)
+
+The STM32 applies these **by itself**. It never waits for the ESP32 or the internet.
+
+| # | Condition | Action | Report |
+|---|---|---|---|
+| 1 | Target reached, bottle removed, sensor fault, tank empty, or **dispense time > 60 s** | Pump off, both valves closed **immediately** | `DONE` or `PARTIAL,…,<fault>` |
+| 2 | No bottle **60 s** after `PAID,ACK` | Back to IDLE | `PARTIAL,<tran_id>,0,0,BOTTLE_TIMEOUT` |
+| 3 | `PAID,<tran_id>` doesn't match the QR shown, or was already used | Don't dispense | `PAID,REJECT,<tran_id>,PAID_NOT_ACCEPTED` (same `tran_id` already accepted → answer `PAID,ACK` again) |
+| 4 | Any result (`DONE`/`PARTIAL`/`ERR` with `tran_id`) | Save in flash; resend every 2 s until `ACK,<tran_id>`, **also after reboot** | — |
+| 5 | No `PING` for 15 s | Idle: show "Offline". Dispensing: finish or stop by rule 1, report when the link returns | — |
+
+Extra hardware limits:
+
+| Condition | Action | Fault code |
 |---|---|---|
-| **Dry-Run / Empty Tank** | Low float switch opens (water $< 5\text{L}$) | Immediately lock dispensing, show "Out of Water" on TFT, send alert to cloud. |
-| **Bottle Removal During Fill** | Load cell reading drops below $W_0 + 10\text{g}$ | Shut both valves in $< 50\text{ms}$, stop pump, display "Bottle Removed Error". |
-| **Dispense Timeout Guard** | Fill time exceeds 45s for 0.5L or 90s for 1.0L | Hard timeout cutoff to prevent flood even if sensors fail. |
-| **Over-weight Guard** | Weight exceeds $1.15 \times \text{Target Weight}$ | Immediate hardware cut-off. |
+| Low float open (< 5 L) | Never start the pump; Out of Service | `TANK_EMPTY` |
+| Mid float open (< 30 L) | Keep selling; warn | `TANK_LOW` (in `PONG` tank field) |
+| Volume > target + 10 % | Hard stop | `OVERFLOW` |
+| Pump on, no flow pulses for 3 s | Stop | `NO_FLOW` |
+| Weight drops ≥ 50 g during fill | Stop within 100 ms | `BOTTLE_REMOVED` |
+| Power lost during fill | On reboot report the saved partial result | `POWER_LOSS_RECOVERY` |
 
+---
+
+## 5. Maintenance Mode
+- Enter from IDLE with a PIN (button sequence, **TBD (hardware)**).
+- Functions: prime pump, open/close each valve, show raw weight and flow pulses, calibrate (see [calibration-guide.md](calibration-guide.md)), self-test.
+- While in maintenance mode the STM32 answers `PONG,ERROR,0,<tank>,NONE`, so no payment can start.

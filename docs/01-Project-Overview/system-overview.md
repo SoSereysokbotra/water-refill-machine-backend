@@ -1,84 +1,98 @@
 # System Overview & Architecture
 
+> Current design: **STM32 (hardware control) + ESP32 WROOM-32 (network gateway) + MQTT + ABA PayWay KHQR.**
+> Details: [SRS v3](srs.md) · [Product Roadmap](product-architecture-roadmap.md) · [Implementation Plan](../04-Cloud-and-Payment/backend-implementation-plan.md)
+
 ## 1. Executive Summary
 
-The **IoT Water Refill Vending Machine** is a standalone, automated, cashless water dispensing station built around the **ESP32-S3** microcontroller. It is designed to provide public drinking water refills at accurate, predetermined volumes (**0.5 L**, **0.75 L**, and **1.0 L**) with high precision, remote telemetry, and zero cash handling.
+The **Smart IoT Water Refill Machine** is a cashless drinking-water refill station for Cambodia. A customer chooses **0.5 L, 0.75 L or 1.0 L**, scans a **KHQR** code with any banking app, places a bottle, and the machine fills it accurately.
 
 ### Key Highlights
-- **Cashless Mobile Payment**: Instant QR code scanning (PromptPay, GCash, Maya, or standard payment gateway) with real-time verification.
-- **Dual-Check Dispensing Precision**: Combines an in-line **YF-S201 Hall-effect flow sensor** with an under-platform **HX711 load cell weight sensor** to guarantee exact fill levels (accuracy within $\pm 5\text{ ml}$).
-- **Two-Stage Flow Control**: Utilizes a **Fast Solenoid Valve** for rapid bulk dispensing (up to ~90% volume) and a **Slow Solenoid Valve** for precision topping without splash or overflow.
-- **4G LTE Cellular Telemetry**: Powered by the **SIM7600** module to log transactions, alert operators on tank refill levels, and report machine health without requiring local Wi-Fi.
-- **Durable Construction**: Food-grade 304 stainless steel enclosure housing a 60L internal water reservoir.
+- **Cashless payment:** dynamic KHQR from **ABA PayWay**. A new QR is made for every purchase, and the backend confirms the payment.
+- **Two microcontrollers, two jobs:**
+  - **STM32** controls everything physical: LCD, buttons, pump, valves, sensors, safety.
+  - **ESP32 WROOM-32** handles the internet only: Wi-Fi and MQTT to the cloud.
+- **Dual-check dispensing:** a **YF-S201 flow sensor** measures volume, and an **HX711 load cell** checks it by weight. Target accuracy is ±1 %.
+- **Two-stage fill:** fast valve to 90 %, then slow valve to 100 %, so there is no splash and no overfill.
+- **Safe without internet:** the STM32 stops the pump on its own (bottle removed, tank empty, timeout).
+- **No lost payments:** every paid purchase ends with water delivered **or** a refund decision.
+- **Remote monitoring:** the backend tracks machine status, tank level, sales and alerts.
 
 ---
 
 ## 2. High-Level Architecture
 
-The **ESP32-S3** serves as the central processing unit coordinating all user interactions, sensing, actuation, and cloud communications.
-
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                          CLOUD SERVER                           │
-│           (Payment Gateway · Telemetry · Admin API)             │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ 4G LTE (UART via SIM7600)
-┌────────────────────────────────▼────────────────────────────────┐
-│                       ESP32-S3 CONTROLLER                       │
-├───────────────────┬─────────────────────────┬───────────────────┤
-│    USER INTERFACE │      SENSING INPUTS     │ ACTUATION OUTPUTS │
-├───────────────────┼─────────────────────────┼───────────────────┤
-│ • 2.8" SPI TFT    │ • Load Cell (HX711)     │ • 12V DC Pump     │
-│   Touchscreen     │ • Flow Sensor (YF-S201) │ • Fast Solenoid   │
-│ • QR Display      │ • Float Sensor (H/M/L)  │ • Slow Solenoid   │
-│ • Red/Green LEDs  │                         │ • Power Relays    │
-└───────────────────┴─────────────────────────┴───────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                               CLOUD                                    │
+│  ┌──────────────┐  HTTPS  ┌───────────────────────┐  HTTPS ┌──────────┐ │
+│  │  ABA PayWay  │◀──────▶│ Backend (NestJS)       │◀──────▶│  Admin   │ │
+│  │    (KHQR)    │         │ Payments · Fleet ·     │        │ dashboard│ │
+│  └──────────────┘         │ Monitoring · Reports   │        └──────────┘ │
+│                           └───────────┬───────────┘                    │
+│                                       │ MQTT                           │
+│                           ┌───────────▼───────────┐                    │
+│                           │  EMQX Cloud (broker)  │                    │
+│                           └───────────┬───────────┘                    │
+└───────────────────────────────────────┼────────────────────────────────┘
+                                        │ MQTT over TLS (port 8883), Wi-Fi
+┌───────────────────────────────────────┼────────────────────────────────┐
+│ MACHINE                    ┌──────────▼──────────┐                     │
+│                            │ ESP32 WROOM-32      │  network gateway     │
+│                            │ Wi-Fi · MQTT · NVS  │                     │
+│                            └──────────┬──────────┘                     │
+│                                       │ UART 115200 8N1 (GPIO16/17)    │
+│                            ┌──────────▼──────────┐                     │
+│                            │ STM32 (Keil)        │  machine controller  │
+│                            └──┬───────┬───────┬──┘                     │
+│                ┌──────────────┘       │       └───────────────┐        │
+│        USER INTERFACE           SENSING INPUTS          ACTUATION      │
+│        • LCD (shows KHQR)       • Load cell (HX711)     • 12 V pump    │
+│        • Buttons 500/750/1000   • Flow sensor (YF-S201) • Fast valve   │
+│          + Cancel               • Float sensors (H/M/L) • Slow valve   │
+│        • Red/Green LEDs, buzzer                                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
+
+| Part | Owner | Job |
+|---|---|---|
+| STM32 | Hardware developer | Screens, buttons, sensors, pump, valves, safety |
+| ESP32 | Backend developer | Wi-Fi, MQTT, UART bridge, saves results when offline |
+| Backend | Backend developer | ABA payments, records, refunds, alerts |
+| Dashboard | Backend developer | Website for owner and operators |
 
 ---
 
-## 3. User Journey & Dispensing Flowchart
+## 3. User Journey
 
-The operational cycle follows a strict fail-safe sequence:
+The customer **selects the volume first, then pays**. The price depends on the volume.
 
 ```text
-   [ Start ]
-       │
-       ▼
- [ Display QR Code ] ──(Customer scans & pays via mobile)
-       │
-       ▼
- [ Verify Payment ] ──(Failed/Timeout)──▶ [ Show Error & Loop ]
-       │ (Success)
-       ▼
- [ Select Volume ] ──(0.5 L / 0.75 L / 1.0 L on Touchscreen)
-       │
-       ▼
- [ Bottle Placement ] ──▶ [ Red LED Active ]
-       │
-       ▼
- [ Check Weight Sensor ] ──(No bottle / < 20g)──▶ [ Prompt Placement ]
-       │ (Bottle Detected: Weight > 20g)
-       ▼
- [ Tare Load Cell & Green LED ON ]
-       │
-       ▼
- [ Stage 1: Fast Refill ] ──(Pump ON + Fast Valve OPEN until 90% target)
-       │
-       ▼
- [ Stage 2: Slow Precision Refill ] ──(Slow Valve OPEN until target reached)
-       │
-       ▼
- [ Dual Verification Check ] ──(Flow pulse count matches $\Delta$Weight)
-       │
-       ▼
- [ Stop Pump & Close Valves ] ──▶ [ Green LED Blink / Tone ]
-       │
-       ▼
- [ Upload Transaction Telemetry via 4G ]
-       │
-       ▼
-    [ End ]
+ [ Welcome screen: choose 0.5 L / 0.75 L / 1.0 L ]
+        │
+        ▼
+ [ STM32 → ESP32 → Backend: "new payment" ] ──(no network)──▶ [ "Offline, try later" ]
+        │
+        ▼
+ [ Backend asks ABA for a KHQR → STM32 shows QR + 3-minute countdown ]
+        │                     └──(Cancel / 3 min, not paid)──▶ [ back to Welcome ]
+        ▼
+ [ Customer pays with banking app → Backend confirms with ABA → "PAID" ]
+        │
+        ▼
+ [ STM32 checks the payment matches the QR shown → "Place your bottle" ]
+        │                     └──(no bottle in 60 s)──▶ [ stop, refund review ]
+        ▼
+ [ Bottle detected (> 20 g) → tare scale → Green LED ]
+        │
+        ▼
+ [ Stage 1: pump + fast valve to 90 % ] → [ Stage 2: slow valve to 100 % ]
+        │                     └──(bottle removed / tank empty / fault)──▶ [ safe stop, refund review ]
+        ▼
+ [ Stop pump, close valves → dual-check (flow vs weight) → "Thank you" ]
+        │
+        ▼
+ [ STM32 → ESP32 → Backend: result saved (kept and resent if offline) ] → [ Welcome ]
 ```
 
 ---
@@ -87,14 +101,15 @@ The operational cycle follows a strict fail-safe sequence:
 
 | Parameter | Specification | Notes |
 |---|---|---|
-| **Microcontroller** | ESP32-S3 (Xtensa Dual-Core 240MHz, 8MB Flash) | Supports FreeRTOS multitasking |
-| **Connectivity** | 4G LTE (SIM7600) + fallback Wi-Fi (2.4GHz) | Real-time transaction & status reporting |
-| **Dispensing Volumes** | 0.5 L (500 ml), 0.75 L (750 ml), 1.0 L (1000 ml) | User selectable via touchscreen |
-| **Dispense Accuracy** | $\pm 1\%$ by volume ($\pm 5\text{ ml}$ typical) | Validated via Dual Sensor Cross-Check |
-| **Reservoir Capacity** | 60 Liters | Food-grade HDPE/Stainless with H/M/L float switches |
-| **User Interface** | 2.8" TFT SPI (ILI9341) + Resistive Touch (XPT2046) | Color graphical interactive menu |
-| **Indicators** | Dual LED (Green = Ready/Dispensing, Red = Waiting/Alert) | High-visibility status |
-| **System Power** | 12V DC (5A) primary input, regulated 5V & 3.3V rails | Powered via AC-to-DC internal supply |
-| **Enclosure** | Food-grade 304 Stainless Steel, lockable access door | 400 mm (W) × 350 mm (D) × 1200 mm (H) |
-| **Operating Temperature** | $5^\circ\text{C}$ to $45^\circ\text{C}$ | Indoor or sheltered outdoor rating |
-
+| **Machine controller** | STM32 (model **TBD by hardware developer**) | Programmed in Keil |
+| **Network gateway** | ESP32 WROOM-32 (DevKit) | PlatformIO, Arduino framework |
+| **Connectivity** | Wi-Fi 2.4 GHz → MQTT over TLS to EMQX Cloud | 4G (SIM7600/A7670 on the ESP32) is an option for later, not in the pilot |
+| **Payment** | ABA PayWay KHQR | Sandbox: USD only; live: USD/KHR |
+| **Dispensing volumes** | 0.5 L, 0.75 L, 1.0 L (fixed tiers) | Prices set remotely from the dashboard |
+| **Dispense accuracy** | ±1 % (±5 mL on 500 mL) | Flow sensor + load cell cross-check |
+| **Reservoir** | 60 L food-grade tank | High / Mid / Low float switches |
+| **User interface** | LCD (2.8" SPI TFT, ILI9341 planned) + buttons | Touch input optional, **TBD (hardware)** |
+| **Indicators** | Red / Green LEDs, buzzer | |
+| **Power** | AC → Mean Well 12 V PSU → 5 V buck → 3.3 V | Both MCUs use 3.3 V logic |
+| **Enclosure** | 304 stainless steel, lockable | 400 W × 350 D × 1200 H mm |
+| **Operating temperature** | 5 °C to 45 °C | Indoor or sheltered outdoor |

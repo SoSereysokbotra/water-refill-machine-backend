@@ -1,37 +1,44 @@
 # Team Roles & Responsibilities
 
+> The team has **two developers**. The split follows the two microcontrollers: the **hardware developer** owns the STM32 and everything physical, and the **backend developer** owns the ESP32 gateway and everything in the cloud.
+
 ## 1. Project Organization
 
-To ensure seamless execution, the project responsibilities are divided into clear operational domains:
-
 ```text
-┌────────────────────────────────────────────────────────┐
-│                    PROJECT MANAGER                     │
-│    (Overall Timeline · Sourcing · Safety & Standards)  │
-└───────────┬────────────────────────────────┬───────────┘
-            │                                │
-┌───────────▼───────────┐        ┌───────────▼───────────┐
-│   HARDWARE ENGINEER   │        │   FIRMWARE DEVELOPER  │
-│  Schematics · Pinouts │        │ ESP32 State Machine   │
-│  Power · Component QA │        │ Sensors · FreeRTOS    │
-└───────────┬───────────┘        └───────────┬───────────┘
-            │                                │
-┌───────────▼───────────┐        ┌───────────▼───────────┐
-│  MECHANICAL ENGINEER  │        │   BACKEND DEVELOPER   │
-│ Enclosure · Plumbing  │        │ Payment Gateway · API │
-│ Tank & Nozzle Fitment │        │ Database · Dashboard  │
-└───────────────────────┘        └───────────────────────┘
+                 ┌──────────────────────────────┐
+                 │  Project supervisor / owner  │
+                 │  Sign-off · budget · pilot   │
+                 └──────────────┬───────────────┘
+                ┌───────────────┴────────────────┐
+┌───────────────▼───────────────┐ ┌──────────────▼────────────────┐
+│ HARDWARE DEVELOPER (Keil)     │ │ BACKEND DEVELOPER (VS Code)   │
+│ STM32 firmware                │ │ ESP32 gateway firmware        │
+│ Circuits · wiring · BOM       │ │ Backend (payments, data)      │
+│ Sensors · pump · valves · LCD │ │ MQTT broker · ABA PayWay      │
+│ Enclosure · plumbing          │ │ Dashboard · deployment        │
+└───────────────┬───────────────┘ └──────────────┬────────────────┘
+                └──────────── UART contract ─────┘
+                     (Implementation Plan §C3)
 ```
 
 ---
 
-## 2. Domain Responsibilities
+## 2. Responsibilities
 
-| Role | Primary Responsibilities | Core Deliverables |
+| Role | Responsibilities | Deliverables |
 |---|---|---|
-| **Project Manager (PM)** | • Project scheduling, milestone tracking, and task priority.<br>• Component sourcing, vendor management, and budget tracking.<br>• Safety guidelines and operational regulatory compliance. | • Project roadmap & budget.<br>• Operations & Maintenance SOPs.<br>• Overall testing sign-off. |
-| **Hardware Engineer** | • ESP32-S3 circuit schematics and power supply rail design (12V/5V/3.3V).<br>• Relay / MOSFET switching board integration for pump and solenoid valves.<br>• Sensor signal conditioning (HX711 noise filtering, flow sensor pull-up). | • Wiring schematic diagrams.<br>• Complete Bill of Materials (BOM).<br>• ESP32 GPIO pinout allocation. |
-| **Firmware Developer** | • FreeRTOS multi-tasking architecture implementation on ESP32-S3.<br>• Finite State Machine (Idle → Payment → Volume Select → Dual-Check Dispense).<br>• Drivers for HX711, YF-S201, ILI9341 display, and SIM7600 AT commands. | • Production firmware binary.<br>• Sensor calibration routines.<br>• Local error recovery logic. |
-| **Mechanical Engineer** | • Stainless steel enclosure design (3-tier compartmentation).<br>• Plumbing layout, food-grade tubing routing, check valves, and fittings.<br>• 60L water tank mounting, drain valve, and float level switch placement. | • Enclosure CAD & dimensions.<br>• Plumbing schematic diagram.<br>• Mechanical assembly guide. |
-| **Backend Developer** | • Cloud REST API endpoints for telemetry and machine status.<br>• Payment gateway webhook integration for instant QR payment validation.<br>• PostgreSQL database schema design for transaction and alert history. | • Cloud API service & endpoints.<br>• Payment verification webhook.<br>• Operator web dashboard. |
+| **Hardware developer** | • STM32 firmware in Keil: screens, buttons, dispensing state machine, two-stage fill<br>• Sensors: HX711 load cell, YF-S201 flow, float switches<br>• Pump and valve driver circuits, power rails (12 V / 5 V / 3.3 V)<br>• **Safety rules** (C3 rules 1–5): stop by itself, bottle timeout, keep the last result<br>• UART side of the STM32 ↔ ESP32 link<br>• Enclosure, plumbing, tank | • STM32 firmware<br>• STM32 pin mapping, wiring diagram, BOM<br>• Calibration routine<br>• Hardware docs (`02-`, `03-`, `05-` folders) |
+| **Backend developer** | • ESP32 firmware: Wi-Fi, MQTT, UART bridge, offline result queue<br>• Backend: ABA PayWay KHQR, payment state machine, refunds, monitoring, reports<br>• EMQX Cloud broker, server deployment, CI/CD<br>• Admin dashboard | • ESP32 firmware<br>• Backend + dashboard<br>• Implementation plan, architecture and deployment docs (`04-`, `06-` folders) |
+| **Both** | • Agree the **UART contract (C3)** and **fault codes (C8)**; change them only together<br>• End-to-end testing, pilot<br>• SRS, system overview, test checklist, operations guide | • Combined test results<br>• Pilot report |
+| **Project supervisor / owner** | • Approves SRS and go-live<br>• ABA merchant account, refunds (ABA portal access)<br>• Budget, pilot site | • Sign-off |
 
+---
+
+## 3. Working Together
+
+| Topic | Rule |
+|---|---|
+| Shared contracts | UART (§C3), MQTT (§C2) and fault codes (§C8) in the [Implementation Plan](../04-Cloud-and-Payment/backend-implementation-plan.md). **Tell the other person before changing them.** |
+| Progress | Tracked in [PROGRESS.md](../PROGRESS.md), including the STM32 status table |
+| Testing without the other side | Backend: the ESP32 serial monitor acts as a fake STM32. Hardware: a USB-serial adapter or the ESP32 test menu acts as the network side. |
+| Code | One GitHub repo; secrets never committed |

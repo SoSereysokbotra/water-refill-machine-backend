@@ -1,196 +1,117 @@
-# STM32 ↔ Backend: QR Payment Integration
+# STM32 QR Payment Integration (UART)
 
-> How the backend creates an ABA PayWay KHQR, sends it to the STM32 over 4G (SIM7600), and how the STM32 draws it on the 2.8" LCD and detects payment.
+> For the **hardware developer**: how the STM32 gets a KHQR, shows it on the LCD, and knows when to dispense.
+> The STM32 **never talks to the internet**. It talks **UART to the ESP32**, and the ESP32 does MQTT and the backend does ABA.
+> Exact message list: Implementation Plan **§C3**; fault codes **§C8**.
 
-| | |
-|---|---|
-| **Backend owner** | Backend (Node.js server in `backend/`) |
-| **Device owner** | Hardware (STM32 + SIM7600 + ILI9341 LCD, Keil) |
-| **Payment provider** | ABA PayWay — KHQR (sandbox for now) |
-| **Status** | Backend done and tested against ABA sandbox. Device side to implement. |
-
----
-
-## 1. Key idea
-
-**The backend never sends an image.** It sends a line of **text** (`qr_string`, ~240 characters). The STM32 turns that text into a QR pattern with a small C library and draws black squares on the LCD.
-
-Any QR encoder produces the same scannable code from the same text, so nothing image-related travels over 4G.
-
----
-
-## 2. End-to-end flow
+## 1. Key Idea
 
 ```text
- STM32 + LCD            SIM7600 (4G)          Backend (Node.js)             ABA PayWay
- ───────────            ────────────          ─────────────────             ──────────
- 1. User picks volume
- 2. POST /api/payment/create ─────────────────▶ 3. Make tran_id + price
-                                                4. Call ABA generate-qr ──────▶
-                                                                          5. Create KHQR
-                                                ◀──────── qrString (text) ──
- 7. Receive JSON ◀───────────────────────────── 6. Reply with qr_string
- 8. Text → QR matrix (C library)
- 9. Draw squares on LCD
-10. Customer scans with ABA app and pays ──────────────────────────────────────▶
-11. Every 2–3 s: GET /api/payment/status/{tran_id} ▶ 12. Ask ABA check-transaction ▶
-                                                ◀──────────────── APPROVED ──
-13. "status":"paid" ◀────────────────────────── 14. Reply paid
-15. LCD: "Place your bottle" → dispense
+STM32  ──UART──▶  ESP32  ──MQTT──▶  Backend  ──HTTPS──▶  ABA PayWay
+ shows QR          gateway           makes the payment      creates the KHQR
+ dispenses         (no logic)        confirms "paid"
+```
+
+- The backend sends the **QR text** (about 240 characters), never an image. The STM32 turns the text into a QR on the LCD.
+- The STM32 dispenses **only** after `PAID,<tran_id>` for the QR it is showing.
+
+---
+
+## 2. End-to-End Flow (STM32 view)
+
+```text
+1. Customer presses 500 mL        → STM32 sends   REQ_PAY,500
+2. Wait for the QR (show "Please wait")
+3. ESP32 sends                     QR,<tran_id>,<amount>,<currency>,<seconds>,<qr_text>
+   → draw the QR, show amount and a countdown from <seconds>
+4. ESP32 sends                     PAID,<tran_id>
+   → tran_id matches the QR shown? reply PAID,ACK,<tran_id>  → "Place your bottle"
+     otherwise                     reply PAID,REJECT,<tran_id>,PAID_NOT_ACCEPTED
+5. Fill the bottle (two-stage)
+6. Send                            DONE,<tran_id>,<flow_ml>,<weight_g>
+   (or PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault> if stopped early)
+   → save the result in flash, resend every 2 s until the ESP32 replies ACK,<tran_id>
+7. Back to Welcome
+
+Other endings while the QR is shown:
+   EXPIRED,<tran_id> / FAILED,<tran_id> / CANCELLED,<tran_id>  → back to Welcome
+   FAILED,0                                                     → "Service unavailable"
+   Customer presses Cancel → send CANCEL,<tran_id> (or CANCEL before the QR arrives)
 ```
 
 ---
 
-## 3. What the backend gives the device
+## 3. UART Messages Used for Payment
 
-Both teammates must use the same values:
+115200 baud, 8N1, one line per message ending with `\n`.
 
-| Item | Example | Who provides |
+| Message | Direction | When |
 |---|---|---|
-| Server base URL | `https://<public-server>` (testing: ngrok URL) | Backend |
-| Device API key | `wrm-dev-2026` | Backend (`DEVICE_API_KEY` in `backend/.env`) |
-| Machine ID | `WRM-001` | Agreed together |
+| `REQ_PAY,<500\|750\|1000>` | STM32 → ESP32 | Volume button pressed |
+| `CANCEL` / `CANCEL,<tran_id>` | STM32 → ESP32 | Cancel pressed |
+| `QR,<tran_id>,<amount>,<currency>,<seconds>,<qr_text>` | ESP32 → STM32 | Show the QR |
+| `PAID,<tran_id>` | ESP32 → STM32 | Payment confirmed (repeated every 2 s until acknowledged) |
+| `PAID,ACK,<tran_id>` / `PAID,REJECT,<tran_id>,<fault>` | STM32 → ESP32 | Accept / refuse the payment |
+| `EXPIRED,<tran_id>` / `FAILED,<tran_id\|0>` / `CANCELLED,<tran_id>` | ESP32 → STM32 | Go back to Welcome |
+| `DONE,<tran_id>,<flow_ml>,<weight_g>` | STM32 → ESP32 | Fill finished |
+| `PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault>` | STM32 → ESP32 | Fill stopped early |
+| `ACK,<tran_id>` | ESP32 → STM32 | Result saved; you may forget it |
+| `NET,OK` / `NET,DOWN` | ESP32 → STM32 | Show or hide "Offline" |
+| `PING` → `PONG,<state>,<tran_id\|0>,<tank>,<fault>` | both | Every 5 s |
 
-> The STM32 reaches the server through 4G, so it **cannot** use `localhost` or a PC's LAN IP. The backend must have a public URL (cloud server, or ngrok tunnel during testing).
+Example lines:
+```text
+REQ_PAY,500
+QR,m3k9x2a1123456,0.15,USD,178,00020101021230510016abaakhppxxx@abaa01151234567890...6304A1B2
+PAID,m3k9x2a1123456
+PAID,ACK,m3k9x2a1123456
+DONE,m3k9x2a1123456,498,501
+ACK,m3k9x2a1123456
+PONG,IDLE,0,FULL,NONE
+```
 
 ---
 
-## 4. API contract
+## 4. STM32 Implementation
 
-All device requests send the header `X-API-Key: <device key>`.
-
-### 4.1 Create payment → get QR text
-
-**Request**
-```http
-POST /api/payment/create
-X-API-Key: wrm-dev-2026
-Content-Type: application/json
-
-{"machine_id":"WRM-001","volume_ml":500}
-```
-
-`volume_ml` must be `500`, `750` or `1000`.
-
-**Response — `201 Created`**
-```json
-{
-  "tran_id": "1793716844389942",
-  "status": "pending",
-  "machine_id": "WRM-001",
-  "volume_ml": 500,
-  "amount": 0.15,
-  "currency": "USD",
-  "expires_at": "2026-11-03T14:43:44.389Z",
-  "expires_in_s": 180,
-  "paid_at": null,
-  "qr_string": "00020101021230510016abaakhppxxx@abaa0115...6304ABCD"
-}
-```
-
-### 4.2 Check payment status (poll every 2–3 s)
-
-**Request**
-```http
-GET /api/payment/status/1793716844389942
-X-API-Key: wrm-dev-2026
-```
-
-**Response — `200 OK`** (same fields, without `qr_string`)
-```json
-{ "tran_id": "1793716844389942", "status": "paid", "expires_in_s": 142, "amount": 0.15, "currency": "USD", ... }
-```
-
-### 4.3 Fields the STM32 uses
-
-| Field | Use on the device |
-|---|---|
-| `qr_string` | **Encode as QR and draw on LCD** (plain text, ~240 chars) |
-| `tran_id` | Store it; used in the status URL (max 20 chars) |
-| `amount`, `currency` | Show under the QR, e.g. `0.15 USD` |
-| `expires_in_s` | Countdown on screen |
-| `status` | Decide what to do next (below) |
-
-### 4.4 Status values
-
-| `status` | Device action |
-|---|---|
-| `pending` | Keep showing the QR, keep polling |
-| `paid` | Clear QR → "Place your bottle" → dispense |
-| `expired` | QR timed out (3 min) → back to welcome screen |
-| `failed` | Payment declined/cancelled → back to welcome screen |
-
-### 4.5 Errors
-
-| HTTP code | Meaning | Device action |
-|---|---|---|
-| `401` | Wrong or missing `X-API-Key` | Check key in firmware |
-| `400` | Bad `volume_ml` or missing `machine_id` | Firmware bug |
-| `404` | Unknown `tran_id` (e.g. server restarted) | Start over |
-| `502` | ABA rejected the request | Show "Payment unavailable", retry later |
-| no reply | 4G / server down | Retry 3×, then show "Offline" |
-
----
-
-## 5. STM32 implementation
-
-### 5.1 Send the request through the SIM7600 (UART AT commands)
-
-**Create payment (POST):**
-```text
-AT+HTTPINIT
-AT+HTTPPARA="URL","https://<server>/api/payment/create"
-AT+HTTPPARA="CONTENT","application/json"
-AT+HTTPPARA="USERDATA","X-API-Key: wrm-dev-2026"
-AT+HTTPDATA=41,10000          → wait for "DOWNLOAD", then send the body:
-{"machine_id":"WRM-001","volume_ml":500}
-AT+HTTPACTION=1               → wait for "+HTTPACTION: 1,201,<len>"
-AT+HTTPREAD=0,<len>           → JSON reply arrives on UART
-AT+HTTPTERM
-```
-
-**Check status (GET):**
-```text
-AT+HTTPINIT
-AT+HTTPPARA="URL","https://<server>/api/payment/status/<tran_id>"
-AT+HTTPPARA="USERDATA","X-API-Key: wrm-dev-2026"
-AT+HTTPACTION=0               → wait for "+HTTPACTION: 0,200,<len>"
-AT+HTTPREAD=0,<len>
-AT+HTTPTERM
-```
-
-> `AT+HTTPDATA` length must equal the exact body length in bytes (`41` for the example body). Check the SIM7600 AT manual for the exact HTTPS setup of your module/firmware.
-
-### 5.2 Extract values from the JSON (no parser needed)
+### 4.1 Receive lines (interrupt + ring buffer)
 
 ```c
-#include <stdio.h>
-#include <string.h>
+#define LINE_MAX 512                 /* QR line is ~300 chars */
+static char line[LINE_MAX];
+static uint16_t len = 0;
 
-/* Copy the value of "key":"value" from json into out. Returns 1 if found. */
-int json_get_str(const char *json, const char *key, char *out, int out_size) {
-    char pattern[40];
-    snprintf(pattern, sizeof pattern, "\"%s\":\"", key);
-    const char *start = strstr(json, pattern);
-    if (!start) return 0;
-    start += strlen(pattern);
-    const char *end = strchr(start, '"');
-    if (!end || end - start >= out_size) return 0;
-    memcpy(out, start, end - start);
-    out[end - start] = '\0';
-    return 1;
+/* call for every received byte (from the UART RX interrupt / DMA ring buffer) */
+void link_on_byte(char c) {
+    if (c == '\r') return;
+    if (c == '\n') { line[len] = '\0'; link_handle_line(line); len = 0; return; }
+    if (len < LINE_MAX - 1) line[len++] = c;
+    else len = 0;                    /* too long: drop the line */
 }
-
-char qr_text[300], tran_id[24], status[16];
-
-json_get_str(http_reply, "qr_string", qr_text, sizeof qr_text);
-json_get_str(http_reply, "tran_id",  tran_id, sizeof tran_id);
-json_get_str(http_reply, "status",   status,  sizeof status);
 ```
 
-Numbers (`amount`, `expires_in_s`) are not in quotes; read them with `strstr` + `atof`/`atoi`, or use a small parser such as **jsmn** or **cJSON**.
+### 4.2 Parse the QR line
 
-### 5.3 Turn the text into a QR and draw it
+`qr_text` is **always the last field** and may contain commas. Split only the first 5 commas and take the rest as the QR text.
+
+```c
+/* QR,<tran_id>,<amount>,<currency>,<seconds>,<qr_text> */
+static int parse_qr(char *s, char **tran, char **amount, char **cur, int *secs, char **qr) {
+    char *f[5];
+    s += 3;                                   /* skip "QR," */
+    for (int i = 0; i < 4; i++) {             /* tran, amount, currency, seconds */
+        f[i] = s;
+        s = strchr(s, ',');
+        if (!s) return 0;
+        *s++ = '\0';
+    }
+    *tran = f[0]; *amount = f[1]; *cur = f[2]; *secs = atoi(f[3]);
+    *qr = s;                                  /* everything left = QR text */
+    return **qr != '\0';
+}
+```
+
+### 4.3 Draw the QR on the LCD
 
 Library: **[nayuki QR-Code-generator](https://github.com/nayuki/QR-Code-generator)** (C version). Add `qrcodegen.c` and `qrcodegen.h` to the Keil project.
 
@@ -221,85 +142,82 @@ void lcd_draw_qr(const char *text) {
 }
 ```
 
-`LCD_FillRect` / `LCD_ShowString` are placeholders — rename them to the functions of your ILI9341 driver.
-
-**Sizing notes**
+`LCD_FillRect` and `LCD_ShowString` are placeholders. Rename them to your ILI9341 driver's functions.
 
 | Item | Value |
 |---|---|
 | KHQR length | ~240 characters |
-| QR version needed | ~10 at ECC LOW → 57 × 57 modules |
-| Scale on 320×240 LCD | 3 px/module → ~195 px square incl. border |
-| RAM for buffers | 2 × ~400 bytes (`static`, not on the stack) |
+| QR version | ~10 at ECC LOW → 57 × 57 modules |
+| Scale on 320×240 | 3 px/module → ~195 px square including border |
+| RAM | 2 × ~400 bytes (`static`, not on the stack) |
 
-Keep the **white border (quiet zone)** and black-on-white colours, or phones may fail to scan.
+Keep the **white border** and **black on white**, or phones may fail to scan.
 
-### 5.4 Payment loop (pseudo-code)
+### 4.4 Payment handling (pseudo-code)
 
 ```c
-void payment_screen(int volume_ml) {
-    char reply[1024];
-
-    if (!http_post_create(volume_ml, reply, sizeof reply)) { show_offline(); return; }
-    json_get_str(reply, "qr_string", qr_text, sizeof qr_text);
-    json_get_str(reply, "tran_id",  tran_id, sizeof tran_id);
-
-    lcd_draw_qr(qr_text);
-    lcd_show_amount_and_timer(reply);
-
-    for (;;) {
-        HAL_Delay(2500);
-        if (!http_get_status(tran_id, reply, sizeof reply)) continue;   /* retry */
-        json_get_str(reply, "status", status, sizeof status);
-
-        if (strcmp(status, "paid") == 0)    { lcd_show("Place your bottle"); start_dispense(volume_ml); return; }
-        if (strcmp(status, "expired") == 0 ||
-            strcmp(status, "failed")  == 0) { lcd_show("Payment cancelled"); return; }
-        /* "pending": update countdown and keep waiting */
-    }
+void link_handle_line(char *l) {
+    if (starts_with(l, "QR,") && state == WAIT_QR) {
+        if (parse_qr(l, &tran, &amt, &cur, &secs, &qr)) {
+            strcpy(shown_tran, tran);
+            lcd_draw_qr(qr); show_amount(amt, cur); start_countdown(secs);
+            state = QR;
+        }
+    } else if (starts_with(l, "PAID,")) {
+        char *t = l + 5;
+        if (state == QR && strcmp(t, shown_tran) == 0) {
+            uart_printf("PAID,ACK,%s\n", t);
+            state = WAIT_BOTTLE; start_bottle_timer(60);
+        } else if (strcmp(t, accepted_tran) == 0) {
+            uart_printf("PAID,ACK,%s\n", t);          /* repeat of an accepted payment */
+        } else {
+            uart_printf("PAID,REJECT,%s,PAID_NOT_ACCEPTED\n", t);
+        }
+    } else if (starts_with(l, "EXPIRED,") || starts_with(l, "FAILED,") || starts_with(l, "CANCELLED,")) {
+        if (state == WAIT_QR || state == QR) go_welcome();
+    } else if (starts_with(l, "ACK,")) {
+        if (strcmp(l + 4, saved_result.tran) == 0) clear_saved_result();
+    } else if (strcmp(l, "PING") == 0) {
+        uart_printf("PONG,%s,%s,%s,%s\n", state_name(), current_tran_or_0(), tank_name(), fault_name());
+        last_ping = now();
+    } else if (strcmp(l, "NET,DOWN") == 0) { show_offline(true);
+    } else if (strcmp(l, "NET,OK") == 0)   { show_offline(false); }
 }
 ```
 
+Safety rules (stop by itself, bottle timeout, keep result in flash) are in [state-machine-logic.md](../03-Firmware-Control/state-machine-logic.md) §4.
+
 ---
 
-## 6. Testing plan
+## 5. Testing Plan
 
 | Step | What | How |
 |---|---|---|
-| 1 | **LCD only** | Hard-code a KHQR string in firmware, call `lcd_draw_qr()`. Scan with a phone camera / QR reader app — the decoded text must match exactly. |
-| 2 | **4G + backend, mock mode** | Backend `PAYWAY_MODE=mock`. STM32 calls the public URL, draws the QR. Backend person opens `/dev` and clicks **Simulate payment** → STM32 must show "Place your bottle". |
-| 3 | **Real ABA sandbox** | Backend `PAYWAY_MODE=sandbox`. Pay the QR with the **ABA PayWay Simulator app** (requested from ABA Integration Team). STM32 must detect `paid`. |
-| 4 | **Timeout** | Don't pay for 3 min → status `expired` → back to welcome screen. |
-| 5 | **Offline** | Unplug antenna during polling → retries, then "Offline", no dispensing. |
+| 1 | **LCD only** | Hard-code a KHQR string, call `lcd_draw_qr()`, scan with a phone QR app. The decoded text must match exactly. |
+| 2 | **UART with a PC** | USB-serial adapter on the STM32 UART. Type the lines from §3 by hand and check the STM32 replies. |
+| 3 | **With the ESP32** | Wire STM32 ↔ ESP32 (TX→RX, RX→TX, GND). Backend running. Press 500 mL → QR on LCD. |
+| 4 | **Real payment** | Pay the QR with the **ABA PayWay simulator app** → STM32 shows "Place your bottle" → `DONE` reaches the backend. |
+| 5 | **Timeout & cancel** | Don't pay for 3 min → `EXPIRED` → Welcome. Press Cancel → Welcome. |
+| 6 | **Offline** | Unplug the ESP32 → after 15 s the STM32 shows "Offline" and doesn't start payments. |
+| 7 | **Result persistence** | Unplug the ESP32 during filling → STM32 finishes, keeps the result, sends it after reconnect. |
 
 ---
 
-## 7. Current backend settings (sandbox)
+## 6. Current Status
 
-| Setting | Value | Note |
-|---|---|---|
-| Currency | USD | Sandbox profile rejects KHR (error 12) until ABA enables it |
-| Prices | 500 mL = 0.15 · 750 mL = 0.20 · 1000 mL = 0.25 | Placeholders — final prices TBD |
-| QR lifetime | 3 minutes | PayWay minimum |
-| Payment detection | Backend polls ABA `check-transaction-2` | No callback URL needed |
+| Item | Status |
+|---|---|
+| Backend + ABA sandbox | ✅ Working (USD, prices 0.15 / 0.20 / 0.25, QR lifetime 3 min) |
+| ESP32 gateway v0.2.0 | ✅ Working: `REQ_PAY`, `QR`, `PAID`, `EXPIRED`, `FAILED`, `DONE`, `ERR`, `NET`, `PING` |
+| ESP32 support for `PAID,ACK`, `ACK`, `CANCEL`, `PARTIAL`, `PONG,<fields>` | ⏳ Firmware v0.3/v0.4 (Phases 2–3) |
+| STM32 UART + LCD QR | ⏳ Hardware developer |
 
----
-
-## 8. Open items
-
-- [ ] Backend: deploy to a public URL (or ngrok) so the SIM7600 can reach it
-- [ ] Backend: change `DEVICE_API_KEY` from `change-me` and share it with the hardware member
-- [ ] Both: confirm final prices and currency (KHR needs ABA approval)
-- [ ] Backend: receive ABA Simulator app + test account from `digitalsupport@ababank.com`
-- [ ] Hardware: SIM7600 HTTPS POST/GET working on STM32
-- [ ] Hardware: `lcd_draw_qr()` verified by scanning
-- [ ] Both: end-to-end test (Section 6, steps 2–5)
-
----
+**Testing with ESP32 v0.2.0 (until v0.3/v0.4):**
+- v0.2.0 only understands a plain `PONG`. A full `PONG,IDLE,0,FULL,NONE` is printed as "Unknown command" and the ESP32 thinks the STM32 link is lost. Payments still work.
+- v0.2.0 **never sends `ACK,<tran_id>`**. An STM32 that resends `DONE` every 2 s until ACK will repeat forever. For early tests, add a test switch in the STM32 code: send the result **once**, don't wait for ACK.
+- `PAID,ACK`, `PAID,REJECT`, `CANCEL` and `PARTIAL` show "Unknown command" on the ESP32 monitor. That's harmless.
 
 ## Related
-
-- **API Design** — full backend API
-- **QR Payment Module** — original firmware design (ESP32 version)
-- **SIM7600 4G Network Module** — AT command details
-- `backend/README.md` — how to run the backend
+- [Implementation Plan §C3](backend-implementation-plan.md): full UART contract
+- [ESP32 gateway README](../../esp32-gateway/README.md): wiring, test menu
+- [State machine (STM32)](../03-Firmware-Control/state-machine-logic.md)
