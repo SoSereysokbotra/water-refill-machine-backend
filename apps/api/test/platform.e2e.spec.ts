@@ -71,7 +71,8 @@ describe('Phase 1 Platform E2E Smoke & Event Pipeline', () => {
 
   it('E2E Event Flow: DomainEvent -> Outbox -> Relay -> Handler -> MQTT Publish/Receive', async () => {
     const eventType = `smoke.payment.received.${Date.now()}`;
-    const targetTopic = `wrm/smoke-test/${Date.now()}`;
+    const baseTopic = `wrm/smoke-test/${Date.now()}`;
+    const targetTopic = `$share/smoke-${Date.now()}/${baseTopic}`;
     const eventId = generateUuidV7();
 
     const receivedPayloads: string[] = [];
@@ -83,7 +84,7 @@ describe('Phase 1 Platform E2E Smoke & Event Pipeline', () => {
 
     // 2. Register outbox handler that publishes to MQTT
     registry.register(eventType, 'MqttPublishHandler', async (event) => {
-      await mqttService.publish(targetTopic, JSON.stringify(event.data), {
+      await mqttService.publish(baseTopic, JSON.stringify(event.data), {
         qos: 1,
         messageExpiryInterval: 60,
       });

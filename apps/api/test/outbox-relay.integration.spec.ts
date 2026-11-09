@@ -29,6 +29,9 @@ describe('OutboxRelay & Deduplication (Integration)', () => {
   });
 
   it('two concurrent relays never double-dispatch the same outbox rows', async () => {
+    // Clear any pending undispatched rows so only our 5 rows are tested
+    await prisma.outbox.deleteMany({ where: { dispatchedAt: null } });
+
     const eventType = `test.concurrent.${Date.now()}`;
     const handlerCalls: string[] = [];
 

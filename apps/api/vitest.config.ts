@@ -8,6 +8,7 @@ export default defineConfig({
     include: ['src/**/*.spec.ts', 'test/**/*.spec.ts'],
     testTimeout: 60000,
     hookTimeout: 60000,
+    fileParallelism: false,
   },
   plugins: [
     swc.vite({
