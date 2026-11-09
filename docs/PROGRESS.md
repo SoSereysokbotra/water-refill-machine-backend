@@ -9,13 +9,13 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 0: Foundations** (not started) |
-| **Next action** | Start Phase 0, task 1 |
-| **Last updated** | 2026-11-08 by Backend developer |
+| **Current phase** | **Phase 0: Foundations** (completed, pending manual checks) |
+| **Next action** | Send ABA / STM32 questions, then start Phase 1: Platform |
+| **Last updated** | 2026-11-09 by Backend developer |
 | **Last commit** | `c3c6c54` |
 
 ### Before Phase 0 (prototype, already working)
-- ✅ Prototype backend (`backend/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
+- ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
 - ✅ EMQX Cloud broker running (`d41b5d19.ala.asia-southeast1.emqxsl.com:8883`)
 - ✅ ESP32 firmware v0.2.0: Wi-Fi + MQTT + test menu, tested end to end
 - ✅ Docs: architecture, deployment, implementation plan v3.1, SRS v3
@@ -28,7 +28,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 
 | # | Phase | Status | Developer | Started | Finished | Last commit |
 |---|---|---|---|---|---|---|
-| 0 | Foundations | ⬜ | | | | |
+| 0 | Foundations | 🟦 | Backend developer | 2026-11-08 | | |
 | 1 | Platform | ⬜ | | | | |
 | 2 | Payments | ⬜ | | | | |
 | 3 | Dispensing & refund review | ⬜ | | | | |
@@ -51,13 +51,13 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
 
 ### Phase 0: Foundations
-- [ ] Clean clone: `pnpm i && pnpm build && pnpm test` passes
-- [ ] Local compose starts postgres, redis, mosquitto
-- [ ] A deliberate cross-layer import fails CI
-- [ ] ADRs merged
+- [x] Clean clone: `pnpm i && pnpm build && pnpm test` passes
+- [x] Local compose starts postgres, redis, mosquitto
+- [x] A deliberate cross-layer import fails CI
+- [x] ADRs merged
 - [ ] `[MANUAL CHECK]` ABA questions sent; STM32 developer confirmed C3 rules (or changes merged into C3)
-- [ ] Prototype still runs from `backend-prototype/`
-- [ ] `PROGRESS.md` updated with handoff note
+- [x] Prototype still runs from `backend-prototype/`
+- [x] `PROGRESS.md` updated with handoff note
 
 ---
 
@@ -117,7 +117,40 @@ Add a new note at the top at the end of every session.
 
 ---
 
-### 2026-11-08: Before Phase 0, by Backend developer
+### 2026-11-09: Phase 0 (Done, pending manual checks) by Backend developer
+
+**Done this session**
+- Completed Task 1: Restructured folders (`backend/` → `backend-prototype/`, `esp32-gateway/` → `firmware/esp32-gateway/`).
+- Completed Task 2: Configured pnpm workspaces, Turborepo, `@wrm/tsconfig`, and `@wrm/contracts`.
+- Completed Task 3: Scaffolded `apps/api` with NestJS 11 + Fastify, booting by `RUN_MODE` (`all`, `api`, `worker`).
+- Completed Task 4: Configured ESLint strict, Prettier, and `dependency-cruiser` for clean architecture boundaries.
+- Completed Task 5: Setup Vitest with SWC, money unit tests, architecture boundary validation test, and Testcontainers smoke test.
+- Completed Task 6: Added `infra/docker-compose.yml` for Postgres 16, Redis 7, and Mosquitto 2 with auth and ACL.
+- Completed Task 7: Setup GitHub Actions CI workflow in `.github/workflows/ci.yml`.
+- Completed Task 9: Authored ADRs 0001–0008 and 0011 in `docs/adr/`.
+- Completed Task 10: Prepared message templates in `readmePhase0.md` for ABA support and STM32 developer.
+- Completed Task 11: Updated root docs (`README.md`, `CLAUDE.md`, `HANDOFF.md`, firmware README).
+
+**Not finished / next steps** (in order)
+1. Send ABA questions (§F3) and STM32 confirmation request (§5 in `readmePhase0.md`).
+2. Start Phase 1: Platform (config, logging, errors, Prisma UoW, Outbox relay, sweeps framework, MQTT platform).
+
+**Changed from the plan**
+- None.
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- `pnpm install && pnpm build && pnpm test:unit` → all packages build and test pass (5/5).
+- `pnpm run depcruise` → 0 architecture boundary violations.
+- `npm --prefix backend-prototype test` → 3/3 prototype tests pass.
+
+**Needs from a person**
+- Send ABA and STM32 questions (see Section 4).
+- Enable GitHub branch protection on `main`.
+
+---
 
 **Done this session**
 - Implementation plan updated to v3.1 for AI-agent handoff (task tags, "Needs before starting", handoff DoD item, commit style).

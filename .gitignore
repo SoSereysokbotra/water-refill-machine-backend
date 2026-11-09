@@ -3,8 +3,10 @@
 *.env
 !.env.example
 
-# Dependencies
+# Dependencies & Build Artifacts
 node_modules/
+.turbo/
+dist/
 
 # Local archive (not part of the repo)
 docs_archive_all_60/
@@ -18,5 +20,7 @@ Thumbs.db
 .vscode/
 
 # ESP32 gateway
+firmware/esp32-gateway/include/secrets.h
+firmware/esp32-gateway/.pio/
 esp32-gateway/include/secrets.h
 esp32-gateway/.pio/

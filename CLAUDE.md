@@ -35,7 +35,7 @@ Update `docs/PROGRESS.md`, even if the phase isn't finished:
 - Subject: imperative, capitalised, no prefix. Examples: `Add payment aggregate`, `Fix expiry sweep grace boundary`. **No** `feat:` / `fix:` prefixes.
 - **No `Co-Authored-By` lines and no AI attribution** in commits or PRs.
 - Commit or push **only when the user asks**.
-- **Never commit:** `backend/.env`, any `.env`, `esp32-gateway/include/secrets.h`, keys or passwords, `docs_archive_all_60/`, `docs/SRS.md` (old duplicate of the SRS).
+- **Never commit:** `backend-prototype/.env`, any `.env`, `firmware/esp32-gateway/include/secrets.h`, keys or passwords, `docs_archive_all_60/`, `docs/SRS.md` (old duplicate of the SRS).
 
 ## 5. Secrets
 
@@ -43,19 +43,19 @@ Update `docs/PROGRESS.md`, even if the phase isn't finished:
 - Never ask the user to paste a password into chat. Ask them to put it in the `.env` file themselves.
 - Use `.env.example` and `secrets.example.h` for placeholders.
 
-## 6. Current layout (until Phase 0 restructures it)
+## 6. Current layout (Phase 0 restructured)
 
 | Path | What it is |
 |---|---|
-| `backend/` | Prototype backend (Node.js, Express, mqtt). `npm run dev`, `npm test` |
-| `esp32-gateway/` | ESP32 WROOM-32 firmware (PlatformIO) |
+| `backend-prototype/` | Prototype backend (Node.js, Express, mqtt). `npm run dev`, `npm test` |
+| `firmware/esp32-gateway/` | ESP32 WROOM-32 firmware (PlatformIO) |
 | `certs/emqxsl-ca.crt` | EMQX Cloud CA certificate (public) |
 | `docs/` | All documentation; index in `docs/README.md` |
 | `HANDOFF.md` | Background on the project history and decisions |
 
 Flash the ESP32 (board on COM7):
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "D:\Water Refill Machine\esp32-gateway" -t upload -t monitor
+& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "firmware\esp32-gateway" -t upload -t monitor
 ```
 
 If port 3000 is busy, find the PID with `netstat -ano | findstr :3000` and kill only that PID.

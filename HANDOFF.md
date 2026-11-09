@@ -19,11 +19,11 @@ STM32 (hardware control, Keil)  <--UART 115200 8N1-->  ESP32 WROOM-32 (gateway) 
 | Area | Status |
 |---|---|
 | ABA PayWay sandbox (KHQR) | ✅ Real sandbox payment tested end to end (paid via ABA simulator app) |
-| Backend prototype (Express) | ✅ `backend/` — REST + MQTT bridge, in-memory payments, `/dev` page |
+| Backend prototype (Express) | ✅ `backend-prototype/` — REST + MQTT bridge, in-memory payments, `/dev` page |
 | EMQX Cloud broker | ✅ `d41b5d19.ala.asia-southeast1.emqxsl.com:8883` (Serverless, spend limit $0) |
 | ESP32 firmware v0.2.0 | ✅ Flashed, MQTT works end to end, test menu + compact terminal QR |
 | STM32 ↔ ESP32 UART wiring | ⏳ Not done yet (teammate side) |
-| Production backend (NestJS) | ⏳ Planned only — Phase 0 not started |
+| Production backend (NestJS) | ⏳ In progress — Phase 0 started |
 | Docs (architecture, deployment, implementation plan v3) | ✅ Committed and pushed |
 
 Teammate has been told the ESP32 + MQTT test works.
@@ -31,13 +31,13 @@ Teammate has been told the ESP32 + MQTT test works.
 ## 3. Repo map
 
 ```text
-backend/                 Prototype backend (ESM, Express 5, mqtt 5, qrcode). Tests: node --test (3 pass)
+backend-prototype/       Prototype backend (ESM, Express 5, mqtt 5, qrcode). Tests: node --test (3 pass)
   src/payway.js          ABA client: generateQr / checkTransaction, HMAC-SHA512 Base64 signing
   src/server.js          REST API, /dev page (latest payment only, create buttons), callback
   src/mqtt.js            MQTT bridge: pay/request → pay/qr, pushes pay/status every 2.5 s
   .env                   (git-ignored) sandbox merchant, USD prices, MQTT creds
 certs/emqxsl-ca.crt      DigiCert Global Root G2 (public)
-esp32-gateway/           PlatformIO project (env esp32dev)
+firmware/esp32-gateway/  PlatformIO project (env esp32dev)
   src/main.cpp           Wi-Fi, NTP, MQTT (persistent session, LWT), UART2 GPIO16/17, test menu, QR print
   include/secrets.h      (git-ignored) Wi-Fi + MQTT creds, MACHINE_ID=WRM-001
   lib/qrcodegen/         nayuki v1.8.0 (vendored)
@@ -51,18 +51,18 @@ Key docs:
 - `docs/04-Cloud-and-Payment/backend-architecture.md`, `docs/06-Testing-and-Operations/deployment.md` — synced to v3.
 - `docs/01-Project-Overview/product-architecture-roadmap.md` — product roadmap.
 - `docs/04-Cloud-and-Payment/stm32-qr-payment-integration.md` — older HTTP-based STM32 guide.
-- `esp32-gateway/README.md`, `backend/README.md` — setup + run instructions.
+- `firmware/esp32-gateway/README.md`, `backend-prototype/README.md` — setup + run instructions.
 
 ## 4. How to run
 
-Backend:
+Backend prototype:
 ```powershell
-cd "D:\Water Refill Machine\backend"; npm run dev     # http://localhost:3000/dev
+cd backend-prototype; npm run dev     # http://localhost:3000/dev
 npm test
 ```
 ESP32 flash + monitor (board on COM7):
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "D:\Water Refill Machine\esp32-gateway" -t upload -t monitor
+& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "firmware\esp32-gateway" -t upload -t monitor
 ```
 Menu: `1/2/3` pay 500/750/1000, `q` reshow QR, `d` dispense done, `i` invert QR, `s` status, `h` help.
 
@@ -79,7 +79,7 @@ If port 3000 is stuck: find PID with `netstat -ano | findstr :3000` and kill tha
 ## 6. User rules (must follow)
 
 - **Git commits:** separate commit per topic (never one commit for everything). **Do NOT add any `Co-Authored-By: Claude ...` line** to commit messages. Short imperative subject, e.g. `Add backend implementation plan (v3)`.
-- Never commit secrets: `backend/.env`, `esp32-gateway/include/secrets.h`. Never commit `docs_archive_all_60/` or `docs/SRS.md`.
+- Never commit secrets: `backend-prototype/.env`, `firmware/esp32-gateway/include/secrets.h`. Never commit `docs_archive_all_60/` or `docs/SRS.md`.
 - Don't ask the user to paste passwords in chat. Sandbox ABA credentials were exposed earlier → rotate before production.
 - The user prefers simple, step-by-step explanations (English is not their first language).
 - Commit/push only when the user asks.
@@ -88,6 +88,6 @@ If port 3000 is stuck: find PID with `netstat -ano | findstr :3000` and kill tha
 
 1. **Send ABA the 8 open questions** in plan §F3 (and teammate questions 9–10 there).
 2. **Teammate:** read plan §C3 (UART contract v1) and §C8 (fault codes) on GitHub; implement UART on STM32, wire GPIO17→RX, GPIO16←TX, common GND.
-3. **Update ESP32 firmware to UART contract v1** when STM32 side is ready (`PAID,ACK`/`PAID,REJECT`, `ACK,<tran_id>`, `CFG`, `PONG,<state>,<tran_id>,<tank>,<fault>`, `transaction/ack`, `config/ack`). Current firmware uses the simpler v0 protocol in `esp32-gateway/README.md` §4.
+3. **Update ESP32 firmware to UART contract v1** when STM32 side is ready (`PAID,ACK`/`PAID,REJECT`, `ACK,<tran_id>`, `CFG`, `PONG,<state>,<tran_id>,<tank>,<fault>`, `transaction/ack`, `config/ack`). Current firmware uses the simpler v0 protocol in `firmware/esp32-gateway/README.md` §4.
 4. **Start Phase 0 — Foundations** of the implementation plan (new NestJS repo layout per §B1 "Target repository layout") when the user says go. Then Phase 1 Platform → Phase 2 Payments (cut-over from prototype) → Phase 3 → Phase 3.5 pilot. Go-live ≈ week 20.
 5. Optional/abandoned: Notion workspace ("Water Refill Machine — Project Workspace", page id `40c58ff48cda8187bd0eee17adcc341a`) has Phases, Milestones, Sprint Tasks, BOM, Test Cases, Meetings, and 30/60 Documentation pages. Not continued.
