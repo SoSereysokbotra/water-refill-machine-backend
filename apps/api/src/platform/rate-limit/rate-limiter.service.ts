@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { RateLimiterRedis } from 'rate-limiter-flexible';
 import { QueueService } from '../queues/queue.service';
 import { RateLimitError } from '../../shared-kernel';
@@ -14,7 +14,7 @@ export class RateLimiterService {
   private readonly logger = new Logger(RateLimiterService.name);
   private readonly limiters = new Map<string, RateLimiterRedis>();
 
-  constructor(private readonly queueService: QueueService) {}
+  constructor(@Inject(QueueService) private readonly queueService: QueueService) {}
 
   getLimiter(options: RateLimitOptions): RateLimiterRedis {
     const keyPrefix = options.keyPrefix ?? 'rl_default';

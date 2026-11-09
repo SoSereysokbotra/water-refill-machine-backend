@@ -1,4 +1,4 @@
-import { Controller, Get, Res, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Res, HttpStatus, Inject } from '@nestjs/common';
 import { FastifyReply } from 'fastify';
 import { PrismaService } from '../database/prisma.service';
 import { QueueService } from '../queues/queue.service';
@@ -7,9 +7,9 @@ import { MqttService } from '../mqtt/mqtt.service';
 @Controller('health')
 export class HealthController {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly queueService: QueueService,
-    private readonly mqttService: MqttService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(QueueService) private readonly queueService: QueueService,
+    @Inject(MqttService) private readonly mqttService: MqttService,
   ) {}
 
   @Get('live')

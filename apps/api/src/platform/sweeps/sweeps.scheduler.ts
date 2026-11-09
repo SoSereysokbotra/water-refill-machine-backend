@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, Logger, Inject } from '@nestjs/common';
 import { QueueService } from '../queues/queue.service';
 import { ConfigService } from '../config/config.service';
 import { Queue } from 'bullmq';
@@ -17,8 +17,8 @@ export class SweepsScheduler implements OnModuleInit {
   private readonly registeredSchedules: RepeatableScheduleDef[] = [];
 
   constructor(
-    private readonly queues: QueueService,
-    private readonly config: ConfigService,
+    @Inject(QueueService) private readonly queues: QueueService,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   registerSchedule(schedule: RepeatableScheduleDef): void {

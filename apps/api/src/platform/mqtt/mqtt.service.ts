@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Inject } from '@nestjs/common';
 import * as mqtt from 'mqtt';
 import { ConfigService } from '../config/config.service';
 import * as fs from 'fs';
@@ -18,7 +18,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private readonly handlers = new Map<string, MqttMessageHandler[]>();
   private isConnected = false;
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   onModuleInit() {
     const url = this.config.get('MQTT_URL');

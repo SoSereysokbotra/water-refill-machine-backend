@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Inject } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { ConfigService } from '../config/config.service';
 import { SweepsScheduler } from '../sweeps/sweeps.scheduler';
@@ -14,9 +14,9 @@ export class RetentionService implements OnModuleInit {
   private readonly logger = new Logger(RetentionService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
-    private readonly sweeps: SweepsScheduler,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ConfigService) private readonly config: ConfigService,
+    @Inject(SweepsScheduler) private readonly sweeps: SweepsScheduler,
   ) {}
 
   onModuleInit() {

@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Inject } from '@nestjs/common';
 import { Queue, Worker, QueueOptions, WorkerOptions, Processor, JobsOptions } from 'bullmq';
 import { ConfigService } from '../config/config.service';
 import IORedis from 'ioredis';
@@ -6,11 +6,11 @@ import IORedis from 'ioredis';
 @Injectable()
 export class QueueService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(QueueService.name);
-  private connection!: IORedis;
+  private connection?: IORedis;
   private readonly queues = new Map<string, Queue>();
   private readonly workers = new Map<string, Worker>();
 
-  constructor(private readonly config: ConfigService) {}
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
   onModuleInit() {
     this.getConnection();

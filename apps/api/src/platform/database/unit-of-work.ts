@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 import { Prisma } from '@prisma/client';
 import { mapPrismaError } from './prisma-error.mapper';
@@ -15,7 +15,7 @@ export interface UnitOfWorkOptions {
 export class UnitOfWork {
   private readonly logger = new Logger(UnitOfWork.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async run<T>(
     fn: (tx: PrismaTransaction) => Promise<T>,

@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Inject } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { QueueService } from '../queues/queue.service';
 import { OutboxHandlerRegistry } from './outbox-handler.registry';
@@ -24,10 +24,10 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
   private dispatchQueue!: Queue;
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly queues: QueueService,
-    private readonly registry: OutboxHandlerRegistry,
-    private readonly config: ConfigService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(QueueService) private readonly queues: QueueService,
+    @Inject(OutboxHandlerRegistry) private readonly registry: OutboxHandlerRegistry,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   private getDispatchQueue(): Queue {
