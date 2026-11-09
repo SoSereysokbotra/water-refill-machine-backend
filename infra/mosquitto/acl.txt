@@ -1,0 +1,8 @@
+# Backend user has full access
+user wrm-backend
+topic readwrite #
+topic readwrite $share/backend/#
+
+# Machine WRM-001 can only publish/subscribe to its own prefix
+user wrm-esp32-001
+topic readwrite wrm/WRM-001/#
