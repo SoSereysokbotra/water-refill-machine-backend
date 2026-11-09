@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
+import { PlatformModule } from './platform';
 
 @Module({
-  imports: [],
+  imports: [PlatformModule],
   controllers: [],
   providers: [],
 })

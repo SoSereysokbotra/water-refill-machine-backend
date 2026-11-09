@@ -1,27 +1,43 @@
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
-import { Logger } from '@nestjs/common';
+import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
-
-export type RunMode = 'all' | 'api' | 'worker';
+import { ConfigService } from './platform/config/config.service';
+import { GlobalExceptionFilter } from './platform/errors/http-exception.filter';
+import { initTelemetry } from './platform/telemetry/telemetry.init';
 
 export async function bootstrap() {
-  const logger = new Logger('Bootstrap');
-  const runMode = (process.env.RUN_MODE ?? 'all') as RunMode;
-  const port = parseInt(process.env.PORT ?? '3000', 10);
+  const adapter = new FastifyAdapter();
+  const runMode = process.env.RUN_MODE ?? 'all';
 
-  logger.log(`Starting application in RUN_MODE=${runMode}`);
+  if (runMode === 'worker') {
+    const appContext = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
+    const logger = appContext.get(Logger);
+    appContext.useLogger(logger);
+    appContext.enableShutdownHooks();
 
-  if (runMode === 'api' || runMode === 'all') {
-    const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter());
-    app.enableShutdownHooks();
-    await app.listen(port, '0.0.0.0');
-    logger.log(`API HTTP server listening on http://0.0.0.0:${port}`);
+    const config = appContext.get(ConfigService);
+    initTelemetry(config.all);
+
+    logger.log('WRM backend started in RUN_MODE=worker');
+    return appContext;
   }
 
-  if (runMode === 'worker' || runMode === 'all') {
-    logger.log('Worker processors initialized (sweeps, outbox relay)');
-  }
+  // RUN_MODE='api' or 'all'
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, { bufferLogs: true });
+  const logger = app.get(Logger);
+  app.useLogger(logger);
+  app.enableShutdownHooks();
+  app.useGlobalFilters(new GlobalExceptionFilter());
+
+  const config = app.get(ConfigService);
+  initTelemetry(config.all);
+
+  const port = config.get('PORT');
+  await app.listen(port, '0.0.0.0');
+
+  logger.log(`WRM backend started in RUN_MODE=${runMode} on port ${port}`);
+  return app;
 }
 
 if (process.env.NODE_ENV !== 'test') {
