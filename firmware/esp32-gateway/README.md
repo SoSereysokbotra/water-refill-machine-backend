@@ -37,7 +37,7 @@ Expected boot log:
 
 Flash and open the monitor in one command (PowerShell):
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "D:\Water Refill Machine\esp32-gateway" -t upload -t monitor
+& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "firmware\esp32-gateway" -t upload -t monitor
 ```
 
 After `[mqtt] connected` a menu appears. Type a key and press **Enter**:
@@ -55,7 +55,7 @@ After `[mqtt] connected` a menu appears. Type a key and press **Enter**:
 +-----------------------------------------+
 ```
 
-1. Start the backend first (`npm run dev` in `backend/`, log must show `[mqtt] connected`).
+1. Start the backend first (`npm run dev` in `backend-prototype/`, log must show `[mqtt] connected`).
 2. Type **`1`** → a compact QR (~61 × 31 characters) and a **SCAN TO PAY** banner appear.
 3. Scan it with the ABA app / simulator.
    - Not scanning? Type **`i`** to invert colours (for light terminal themes), make the terminal font larger, or open `http://localhost:3000/dev`.

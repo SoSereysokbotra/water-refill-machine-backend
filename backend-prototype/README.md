@@ -8,7 +8,7 @@ Small Node.js server that creates **ABA PayWay KHQR** payments for the machine a
 ## Run it
 
 ```bash
-cd backend
+cd backend-prototype
 npm install
 cp .env.example .env      # then edit .env (DEVICE_API_KEY, prices, PAYWAY_MODE)
 npm run dev               # http://localhost:3000
