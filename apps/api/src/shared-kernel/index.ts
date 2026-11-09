@@ -1,4 +1,7 @@
-/**
- * Shared Kernel: AggregateRoot, DomainEvent, Id, Money, Clock, base errors.
- */
-export const SHARED_KERNEL_VERSION = '1.0.0';
+export * from './domain-event';
+export * from './aggregate-root';
+export * from './clock';
+export * from './uuid';
+export * from './money';
+export * from './tran-id-generator';
+export * from './errors';
