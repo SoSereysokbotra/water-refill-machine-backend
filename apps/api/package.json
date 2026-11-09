@@ -1,0 +1,40 @@
+{
+  "name": "@wrm/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"{src,test}/**/*.ts\"",
+    "depcruise": "depcruise src --config .dependency-cruiser.cjs",
+    "test": "vitest run",
+    "test:unit": "vitest run --exclude=\"**/*.smoke.spec.ts\"",
+    "test:integration": "vitest run --testNamePattern=\"Testcontainers\"",
+    "dev": "tsx watch src/main.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.10",
+    "@nestjs/core": "^11.0.10",
+    "@nestjs/platform-fastify": "^11.0.10",
+    "@wrm/contracts": "workspace:*",
+    "fastify": "^5.2.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.10.15",
+    "@types/node": "^22.13.4",
+    "@typescript-eslint/eslint-plugin": "^8.24.0",
+    "@typescript-eslint/parser": "^8.24.0",
+    "@wrm/tsconfig": "workspace:*",
+    "dependency-cruiser": "^16.10.0",
+    "eslint": "^9.20.1",
+    "testcontainers": "^10.18.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.0",
+    "unplugin-swc": "^1.5.1",
+    "vitest": "^3.0.5"
+  }
+}

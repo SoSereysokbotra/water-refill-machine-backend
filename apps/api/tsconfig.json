@@ -1,0 +1,9 @@
+{
+  "extends": "@wrm/tsconfig/nest.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./",
+    "baseUrl": "./"
+  },
+  "include": ["src/**/*", "test/**/*"]
+}
