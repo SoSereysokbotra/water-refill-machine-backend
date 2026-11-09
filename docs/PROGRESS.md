@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 0: Foundations** (completed, pending manual checks) |
-| **Next action** | Send ABA / STM32 questions, then start Phase 1: Platform |
+| **Current phase** | **Phase 1: Platform** (completed) |
+| **Next action** | Review Phase 1 handoff, then start Phase 2: Payments |
 | **Last updated** | 2026-11-09 by Backend developer |
-| **Last commit** | `c3c6c54` |
+| **Last commit** | `phase1` |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -28,8 +28,8 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 
 | # | Phase | Status | Developer | Started | Finished | Last commit |
 |---|---|---|---|---|---|---|
-| 0 | Foundations | 🟦 | Backend developer | 2026-11-08 | | |
-| 1 | Platform | ⬜ | | | | |
+| 0 | Foundations | ✅ | Backend developer | 2026-11-08 | 2026-11-09 | `c3c6c54` |
+| 1 | Platform | ✅ | Backend developer | 2026-11-09 | 2026-11-09 | `phase1` |
 | 2 | Payments | ⬜ | | | | |
 | 3 | Dispensing & refund review | ⬜ | | | | |
 | 3.5 | Early pilot | ⬜ | | | | |
@@ -50,7 +50,14 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
 
-### Phase 0: Foundations
+### Phase 1: Platform
+- [x] Worker killed mid-dispatch → each event handled once per handler after restart
+- [x] `FLUSHALL` on Redis → sweeps resume within one interval
+- [x] `/health/ready` accurate; logs carry `traceId`; secrets redacted
+- [x] `RUN_MODE=all` runs API + worker in one process
+- [x] `PROGRESS.md` updated with handoff note
+
+### Phase 0: Foundations (completed)
 - [x] Clean clone: `pnpm i && pnpm build && pnpm test` passes
 - [x] Local compose starts postgres, redis, mosquitto
 - [x] A deliberate cross-layer import fails CI
@@ -114,6 +121,47 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-09: Phase 1 (Platform completed) by Backend developer
+
+**Done this session**
+- Task 1 (Config): Zod schema validation adhering to Plan §B5 (`config.schema.ts`, `config.service.ts`), fail-fast boot, support for `RUN_MODE=all|api|worker`.
+- Task 2 (Logging): `nestjs-pino` with JSON structured logging, trace IDs (`req.id` / `traceId` propagation), sensitive parameter redaction (`authorization`, `api_key`, `secret`, `password`, `hash`).
+- Task 3 (Errors): Base error taxonomy in shared kernel (`DomainError`, `NotFoundError`, `ConflictError`, `ValidationError`, `RateLimitError`, `InfrastructureError`), `toErrorCode` helper, Fastify global exception filter RFC 7807/Plan payload format.
+- Task 4 (Shared Kernel): `AggregateRoot` base class, `DomainEvent` interface, `Clock`/`SystemClock`/`FakeClock`, `generateUuidV7`, `Money` value object (KHR/USD minor units, rounding, scale, conversions), `TranIdGenerator` (alphanumeric URL-safe <= 20 chars).
+- Task 5 (Database & UoW): Prisma with connection pooling (`connection_limit=5`, `directUrl`), `PrismaService`, interactive `UnitOfWork` with conflict retry (20ms, 50ms, 100ms), Prisma error mapping (`P2002`/`P2034` → `ConflictError`, `P2025` → `NotFoundError`, connection → `InfrastructureError`).
+- Task 6 (Outbox): `outbox` table in Prisma schema with partial indexes, `OutboxService.add(events, tx)`, `OutboxHandlerRegistry`, `OutboxRelay` (250ms polling with `FOR UPDATE SKIP LOCKED LIMIT 20`, BullMQ dispatch with deterministic `jobId: ${id}__${handlerName}`, exponential backoff retries, `dead_at` after 10 attempts).
+- Task 7 (Inbox): `InboxService.record(messageId, source, tx)` requiring transaction client argument by type.
+- Task 8 (Sweeps Framework): `BaseSweep` class (batch query, process item, skip-on-error, metrics summary), `SweepsScheduler` upserting repeatable BullMQ jobs at worker boot.
+- Task 9 (MQTT Platform): `MqttService` using MQTT 5, TLS/CA cert support, persistent session, reconnect handling, EMQX shared subscription support (`$share/backend/...`), QoS 1, message expiry interval, graceful shutdown; `@MqttSubscribe` decorator.
+- Task 10 (Queues & Retention): `QueueService` managing BullMQ queues and workers on `REDIS_URL`, DLQ support, graceful shutdown; `RetentionService` running `maintenance.retention` (purging only dispatched outbox > `RETENTION_OUTBOX_DAYS`, inbox > `RETENTION_INBOX_DAYS`, heartbeats > `RETENTION_HEARTBEAT_DAYS`).
+- Task 11 (Rate Limiter): Redis-backed `RateLimiterService` using `rate-limiter-flexible`, injectable per key/action, throwing `RateLimitError`.
+- Task 12 (Health & Telemetry): `/health/live` (process alive + uptime), `/health/ready` (DB, Redis, MQTT readiness probes), OpenTelemetry and Sentry initialization hooks.
+- Tests written & verified: 11 test suites passing (32 tests total) covering unit tests, integration tests (UoW commit/rollback/retry, outbox relay concurrent deduplication, sweeps scheduler resilience after `FLUSHALL`, retention policy), and E2E smoke pipeline (DomainEvent → Outbox → Relay → Handler → MQTT Publish/Subscribe).
+
+**Not finished / next steps** (in order)
+1. Proceed to Phase 2: Payments (Domain entity `Payment`, PayWay client, QR generation, ABA webhook callback, reconciliation sweeps, refund mode).
+
+**Changed from the plan**
+- Pinned `@prisma/client@^6.19.3` and `prisma@^6.19.3` to avoid Prisma 7's breaking removal of `url`/`directUrl` from schema.prisma.
+- In BullMQ v5, repeatable jobs use `upsertJobScheduler(schedulerId, repeatOptions, jobTemplate)` and custom job IDs cannot contain `:` (used deterministic `${id}__${handlerName}`).
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- `pnpm run build` → compiles all packages.
+- `pnpm run typecheck` → passes across all packages (3/3).
+- `pnpm run lint` → 0 ESLint errors/warnings.
+- `pnpm run depcruise` → 0 architecture boundary violations (78 modules, 157 dependencies).
+- `pnpm test` → 11 test suites, 32 tests passing.
+- `pnpm --filter @wrm/api dev` → boots in `RUN_MODE=all` on port 3000.
+- `curl http://localhost:3000/health/ready` → `{"status":"ok","checks":{"database":"up","redis":"up","mqtt":"up"}}`.
+
+**Needs from a person**
+- None for Phase 1. (Phase 0 manual checks for ABA and STM32 questions remain pending).
 
 ---
 
