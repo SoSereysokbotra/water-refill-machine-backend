@@ -1,0 +1,9 @@
+node_modules
+dist
+.turbo
+.pio
+pnpm-lock.yaml
+backend-prototype
+firmware
+docs
+*.md
