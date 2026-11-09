@@ -1,0 +1,45 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Outbox {
+  id            String    @id                       // UUIDv7 = event id
+  aggregateType String    @map("aggregate_type")
+  aggregateId   String    @map("aggregate_id")
+  eventType     String    @map("event_type")
+  payload       Json
+  occurredAt    DateTime  @map("occurred_at")
+  dispatchedAt  DateTime? @map("dispatched_at")       // enqueued to BullMQ
+  attempts      Int       @default(0)
+  lastError     String?   @map("last_error")
+  deadAt        DateTime? @map("dead_at")
+
+  @@index([occurredAt], map: "outbox_occurred_at_idx")
+  @@map("outbox")
+}
+
+model Inbox {
+  messageId  String   @id @map("message_id")
+  source     String
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@index([receivedAt], map: "inbox_received_at_idx")
+  @@map("inbox")
+}
+
+model Heartbeat {
+  id        BigInt   @id @default(autoincrement())
+  machineId String   @map("machine_id")
+  data      Json
+  at        DateTime @default(now())
+
+  @@index([machineId, at], map: "heartbeats_machine_id_at_idx")
+  @@index([at], map: "heartbeats_at_idx")
+  @@map("heartbeats")
+}
