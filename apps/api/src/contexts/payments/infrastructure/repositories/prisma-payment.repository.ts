@@ -226,6 +226,17 @@ export class PrismaPaymentRepository implements PaymentRepository {
     return rows.map((r) => this.toDomain(r));
   }
 
+  async recordRejection(machineId: string, tranId: string | undefined, code: string, raw: unknown): Promise<void> {
+    await this.prisma.dispenseRejection.create({
+      data: {
+        machineId,
+        tranId: tranId ?? null,
+        code,
+        raw: (raw ?? {}) as Prisma.InputJsonValue,
+      },
+    });
+  }
+
   private async recordEvents(payment: Payment, client: Prisma.TransactionClient | PrismaService): Promise<void> {
     if (payment.stateChanges.length === 0) return;
 

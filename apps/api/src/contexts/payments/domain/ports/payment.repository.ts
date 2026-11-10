@@ -10,4 +10,5 @@ export interface PaymentRepository {
   save(payment: Payment, tx?: unknown): Promise<void>;
   findDueForAbaCheck(now: Date, limit: number, tx?: unknown): Promise<Payment[]>;
   findDueForReconciliation(now: Date, limit: number, tx?: unknown): Promise<Payment[]>;
+  recordRejection(machineId: string, tranId: string | undefined, code: string, raw: unknown): Promise<void>;
 }

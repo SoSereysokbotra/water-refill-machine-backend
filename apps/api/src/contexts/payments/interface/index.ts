@@ -1,6 +1,4 @@
-/**
- * Payments Context - Interface Layer
- * Contains: MQTT consumers, REST controllers, Job processors
- * Allowed imports: application, packages/contracts
- */
-export const PAYMENTS_INTERFACE = 'payments/interface';
+export * from './outbox/payment-outbox.handlers';
+export * from './mqtt/payments.mqtt-consumer';
+export * from './jobs/payment-jobs.processor';
+export * from './http/payments.controller';

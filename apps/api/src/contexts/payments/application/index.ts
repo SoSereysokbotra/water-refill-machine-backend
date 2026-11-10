@@ -7,3 +7,14 @@ export * from './commands/probe-payment.command';
 export * from './commands/record-dispense.command';
 export * from './sweeps/payments.sweep';
 export * from './sweeps/reconcile.sweep';
+export type {
+  PaymentCreatedData,
+  PaymentPaidData,
+  PaymentExpiredData,
+  PaymentCancelledData,
+  PaymentFailedData,
+  LatePaymentDetectedData,
+  RefundReviewOpenedData,
+} from '../domain/payment.events';
+export type { PaymentStatus, Currency } from '../domain/payment.types';
+export type { PaymentRepository } from '../domain/ports/payment.repository';
