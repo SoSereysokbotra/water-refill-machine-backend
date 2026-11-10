@@ -35,23 +35,38 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let message = 'Internal server error';
     let details: unknown = undefined;
 
-    if (exception instanceof BaseError) {
-      code = exception.code;
-      message = exception.message;
-      details = exception.details;
+    const isBaseError =
+      exception instanceof BaseError ||
+      (exception instanceof Error && typeof (exception as Record<string, unknown>).code === 'string');
 
-      if (exception instanceof NotFoundError) {
+    if (isBaseError) {
+      const err = exception as BaseError;
+      code = err.code;
+      message = err.message;
+      details = err.details;
+
+      if (code === ERROR_CODES.PAY_NOT_FOUND || exception instanceof NotFoundError) {
         statusCode = HttpStatus.NOT_FOUND;
-      } else if (exception instanceof ConflictError) {
+      } else if (
+        code === ERROR_CODES.CONCURRENCY_CONFLICT ||
+        code === ERROR_CODES.REFUND_ALREADY_CLAIMED ||
+        code === ERROR_CODES.REFUND_ALREADY_DECIDED ||
+        exception instanceof ConflictError
+      ) {
         statusCode = HttpStatus.CONFLICT;
-      } else if (exception instanceof ValidationError) {
+      } else if (
+        code === ERROR_CODES.VALIDATION_FAILED ||
+        code === ERROR_CODES.REFUND_BLOCKED_PENDING_OUTCOMES ||
+        code === ERROR_CODES.PAY_MACHINE_BUSY ||
+        exception instanceof ValidationError
+      ) {
         statusCode = HttpStatus.BAD_REQUEST;
-      } else if (exception instanceof RateLimitError) {
+      } else if (code === ERROR_CODES.RATE_LIMITED || exception instanceof RateLimitError) {
         statusCode = HttpStatus.TOO_MANY_REQUESTS;
       } else if (exception instanceof InfrastructureError) {
         statusCode = HttpStatus.BAD_GATEWAY;
       } else {
-        statusCode = HttpStatus.CONFLICT; // Default for DomainError
+        statusCode = HttpStatus.BAD_REQUEST; // Domain errors default to 400
       }
     } else if (exception instanceof HttpException) {
       statusCode = exception.getStatus();

@@ -1,6 +1,5 @@
 import { AggregateRoot, Clock, DomainError } from '../../../shared-kernel';
 import {
-  dispenseCompletedEvent,
   dispenseFailedEvent,
   dispenseOutcomeUnknownEvent,
   latePaymentDetectedEvent,
@@ -258,7 +257,7 @@ export class Payment extends AggregateRoot {
     fault?: string | null;
     clock: Clock;
   }): { isLate: boolean; suggestedRefundMinor: number } {
-    const { result, flowMl, weightG, diffPercent, fault, clock } = params;
+    const { result, flowMl, weightG, fault, clock } = params;
 
     // If already finalized (DISPENSED, REFUNDED, REFUND_REJECTED) -> late outcome per C1
     if (this._status === 'DISPENSED' || this._status === 'REFUNDED' || this._status === 'REFUND_REJECTED') {

@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Clock, ConflictError } from '../../../../shared-kernel';
 import { BaseSweep } from '../../../../platform/sweeps/sweep.base';
 import { ConfigService } from '../../../../platform/config/config.service';
