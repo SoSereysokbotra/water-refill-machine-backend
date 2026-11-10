@@ -1,6 +1,6 @@
-/**
- * Payments Context - Domain Layer
- * Contains: Aggregates, Value Objects, Domain Events, Domain Errors, Ports
- * Allowed imports: shared-kernel only
- */
-export const PAYMENTS_DOMAIN = 'payments/domain';
+export * from './payment.types';
+export * from './payment.events';
+export * from './payment.aggregate';
+export * from './ports/payment.repository';
+export * from './ports/payment-gateway.port';
+export * from './ports/machine.port';
