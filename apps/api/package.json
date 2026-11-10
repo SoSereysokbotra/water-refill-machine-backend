@@ -13,6 +13,7 @@
     "dev": "tsx watch src/main.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
     "db:migrate": "prisma migrate dev"
   },
   "dependencies": {

@@ -8,14 +8,204 @@ generator client {
   provider = "prisma-client-js"
 }
 
+enum PaymentStatus {
+  PENDING
+  PAID
+  DISPENSED
+  DISPENSE_UNKNOWN
+  EXPIRED
+  CANCELLED
+  FAILED
+  REFUND_REVIEW
+  REFUNDED
+  REFUND_REJECTED
+}
+
+enum Currency {
+  KHR
+  USD
+}
+
+enum DispenseResult {
+  ok
+  partial
+  error
+}
+
+enum RefundReason {
+  LATE_PAYMENT
+  DISPENSE_FAILED
+  DISPENSE_PARTIAL
+  DISPENSE_UNKNOWN
+}
+
+enum RefundStatus {
+  open
+  claimed
+  refunded
+  rejected
+  auto_failed
+}
+
+enum AlertSeverity {
+  info
+  warning
+  critical
+}
+
+enum AlertStatus {
+  active
+  acknowledged
+  resolved
+}
+
+model Machine {
+  id              String         @id // e.g. "WRM-001"
+  name            String
+  location        String?
+  enabled         Boolean        @default(true)
+  currency        Currency       @default(USD)
+  firmware        String?
+  mqttUsername    String         @unique @map("mqtt_username")
+  lastSeenAt      DateTime?      @map("last_seen_at")
+  online          Boolean        @default(false)
+  lastStm32State  String?        @map("last_stm32_state")
+  pendingOutcomes Int            @default(0) @map("pending_outcomes")
+  version         Int            @default(0)
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  prices   MachinePrice[]
+  payments Payment[]
+
+  @@map("machines")
+}
+
+model MachinePrice {
+  machineId   String   @map("machine_id")
+  volumeMl    Int      @map("volume_ml") // 500 | 750 | 1000
+  amountMinor Int      @map("amount_minor")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  @@id([machineId, volumeMl])
+  @@map("machine_prices")
+}
+
+model Payment {
+  tranId              String        @id @map("tran_id")
+  machineId           String        @map("machine_id")
+  requestId           String        @map("request_id")
+  volumeMl            Int           @map("volume_ml")
+  amountMinor         Int           @map("amount_minor")
+  currency            Currency
+  status              PaymentStatus
+  qrString            String        @map("qr_string")
+  expiresAt           DateTime      @map("expires_at")
+  paidAt              DateTime?     @map("paid_at")
+  abaApv              String?       @map("aba_apv")
+  nextAbaCheckAt      DateTime?     @map("next_aba_check_at")
+  abaCheckCount       Int           @default(0) @map("aba_check_count")
+  lastAbaCheckAt      DateTime?     @map("last_aba_check_at")
+  closedAt            DateTime?     @map("closed_at")
+  refundedAmountMinor Int?          @map("refunded_amount_minor")
+  refundedAt          DateTime?     @map("refunded_at")
+  version             Int           @default(0)
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  machine    Machine        @relation(fields: [machineId], references: [id], onDelete: Restrict)
+  events     PaymentEvent[]
+  dispense   Dispense?
+  refundCase RefundCase?
+
+  @@unique([machineId, requestId])
+  @@index([status, nextAbaCheckAt])
+  @@index([status, paidAt])
+  @@index([machineId, createdAt])
+  @@map("payments")
+}
+
+model PaymentEvent {
+  id         String         @id @default(uuid())
+  tranId     String         @map("tran_id")
+  fromStatus PaymentStatus? @map("from_status")
+  toStatus   PaymentStatus  @map("to_status")
+  reason     String?
+  actorId    String?        @map("actor_id")
+  at         DateTime       @default(now())
+
+  payment Payment @relation(fields: [tranId], references: [tranId], onDelete: Restrict)
+
+  @@index([tranId])
+  @@map("payment_events")
+}
+
+model Dispense {
+  tranId      String         @id @map("tran_id")
+  machineId   String         @map("machine_id")
+  result      DispenseResult
+  flowMl      Int            @map("flow_ml")
+  weightG     Int            @map("weight_g")
+  diffPercent Decimal        @map("diff_percent") @db.Decimal(5, 2)
+  fault       String?
+  occurredAt  DateTime       @map("occurred_at")
+  receivedAt  DateTime       @default(now()) @map("received_at")
+  clockSkew   Boolean        @default(false) @map("clock_skew")
+  late        Boolean        @default(false)
+
+  payment Payment @relation(fields: [tranId], references: [tranId], onDelete: Restrict)
+
+  @@index([machineId, occurredAt])
+  @@map("dispenses")
+}
+
+model DispenseRejection {
+  id         String   @id @default(uuid())
+  machineId  String   @map("machine_id")
+  tranId     String?  @map("tran_id")
+  code       String
+  raw        Json
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@index([machineId, receivedAt])
+  @@map("dispense_rejections")
+}
+
+model RefundCase {
+  tranId               String       @id @map("tran_id")
+  reason               RefundReason
+  suggestedAmountMinor Int          @map("suggested_amount_minor")
+  refundedAmountMinor  Int?         @map("refunded_amount_minor")
+  status               RefundStatus @default(open)
+  claimedBy            String?      @map("claimed_by")
+  claimedUntil         DateTime?    @map("claimed_until")
+  method               String?
+  reference            String?      @unique
+  decidedBy            String?      @map("decided_by")
+  decidedAt            DateTime?    @map("decided_at")
+  decisionReason       String?      @map("decision_reason")
+  attempts             Int          @default(0)
+  lastError            String?      @map("last_error")
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
+
+  payment Payment @relation(fields: [tranId], references: [tranId], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@map("refund_cases")
+}
+
 model Outbox {
-  id            String    @id                       // UUIDv7 = event id
+  id            String    @id
   aggregateType String    @map("aggregate_type")
   aggregateId   String    @map("aggregate_id")
   eventType     String    @map("event_type")
   payload       Json
   occurredAt    DateTime  @map("occurred_at")
-  dispatchedAt  DateTime? @map("dispatched_at")       // enqueued to BullMQ
+  dispatchedAt  DateTime? @map("dispatched_at")
   attempts      Int       @default(0)
   lastError     String?   @map("last_error")
   deadAt        DateTime? @map("dead_at")
