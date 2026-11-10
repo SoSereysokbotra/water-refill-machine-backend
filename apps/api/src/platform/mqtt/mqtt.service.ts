@@ -101,35 +101,42 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  subscribe(topic: string, handler: MqttMessageHandler): void {
+  subscribe(topic: string, handler: MqttMessageHandler): Promise<void> {
     const list = this.handlers.get(topic) ?? [];
     list.push(handler);
     this.handlers.set(topic, list);
 
     if (this.isConnected) {
-      this.subscribeTopic(topic);
+      return this.subscribeTopic(topic);
     }
+    return Promise.resolve();
   }
 
-  private subscribeTopic(topic: string): void {
+  private subscribeTopic(topic: string): Promise<void> {
     const sharedGroup = this.config.get('MQTT_SHARED_GROUP');
     // If not already a shared subscription and contains wildcards, use shared subscription
     const fullTopic = topic.startsWith('$share/')
       ? topic
       : `$share/${sharedGroup}/${topic}`;
 
-    this.client.subscribe(fullTopic, { qos: 1 }, (err) => {
-      if (err) {
-        this.logger.error(`Subscription failed for [${fullTopic}]: ${err.message}`);
-      } else {
-        this.logger.log(`Subscribed to MQTT topic [${fullTopic}]`);
-      }
+    return new Promise<void>((resolve, reject) => {
+      this.client.subscribe(fullTopic, { qos: 1 }, (err) => {
+        if (err) {
+          this.logger.error(`Subscription failed for [${fullTopic}]: ${err.message}`);
+          reject(err);
+        } else {
+          this.logger.log(`Subscribed to MQTT topic [${fullTopic}]`);
+          resolve();
+        }
+      });
     });
   }
 
   private resubscribeAll(): void {
     for (const topic of this.handlers.keys()) {
-      this.subscribeTopic(topic);
+      void this.subscribeTopic(topic).catch((err: unknown) => {
+        this.logger.error(`Resubscribe error for ${topic}: ${err instanceof Error ? err.message : String(err)}`);
+      });
     }
   }
 

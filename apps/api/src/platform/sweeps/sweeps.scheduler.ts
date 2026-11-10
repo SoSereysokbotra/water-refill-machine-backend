@@ -53,13 +53,7 @@ export class SweepsScheduler implements OnModuleInit, OnApplicationBootstrap {
         if (schedule) {
           await schedule.processor();
         } else {
-          this.logger.warn(`No schedule handler found for repeatable job [${job.name}], removing from Redis`);
-          try {
-            await this.sweepQueue.removeJobScheduler(`scheduler:${job.name}`);
-            await this.sweepQueue.removeJobScheduler(job.name);
-          } catch {
-            // ignore
-          }
+          this.logger.warn(`No schedule handler found for repeatable job [${job.name}]`);
         }
       },
       { concurrency: 5 },

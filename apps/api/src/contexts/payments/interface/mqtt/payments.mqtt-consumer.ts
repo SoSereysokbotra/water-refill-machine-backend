@@ -32,10 +32,10 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
   ) {}
 
-  onModuleInit(): void {
-    this.mqtt.subscribe('wrm/+/pay/request', this.onPayRequest.bind(this));
-    this.mqtt.subscribe('wrm/+/pay/cancel', this.onPayCancel.bind(this));
-    this.mqtt.subscribe('wrm/+/transaction', this.onTransaction.bind(this));
+  async onModuleInit(): Promise<void> {
+    await this.mqtt.subscribe('wrm/+/pay/request', this.onPayRequest.bind(this));
+    await this.mqtt.subscribe('wrm/+/pay/cancel', this.onPayCancel.bind(this));
+    await this.mqtt.subscribe('wrm/+/transaction', this.onTransaction.bind(this));
     this.logger.log('PaymentsMqttConsumer subscribed to pay/request, pay/cancel, transaction');
   }
 

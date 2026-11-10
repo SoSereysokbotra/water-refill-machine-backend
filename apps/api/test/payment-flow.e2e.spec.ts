@@ -47,21 +47,21 @@ describe('Phase 2 E2E Payment & Dispense Flow', () => {
     let capturedAck: any = null;
 
     // Set up machine listeners on client MQTT topics
-    mqtt.subscribe(buildMachineTopic(testMachineId, MQTT_TOPICS.PAY_QR), (_topic, payload) => {
+    await mqtt.subscribe(buildMachineTopic(testMachineId, MQTT_TOPICS.PAY_QR), (_topic, payload) => {
       const msg = JSON.parse(payload.toString());
       if (msg.request_id === requestId) {
         capturedQr = msg;
       }
     });
 
-    mqtt.subscribe(buildMachineTopic(testMachineId, MQTT_TOPICS.PAY_STATUS), (_topic, payload) => {
+    await mqtt.subscribe(buildMachineTopic(testMachineId, MQTT_TOPICS.PAY_STATUS), (_topic, payload) => {
       const msg = JSON.parse(payload.toString());
       if (msg.status === 'paid') {
         capturedPaid = msg;
       }
     });
 
-    mqtt.subscribe(buildMachineTopic(testMachineId, MQTT_TOPICS.TRANSACTION_ACK), (_topic, payload) => {
+    await mqtt.subscribe(buildMachineTopic(testMachineId, MQTT_TOPICS.TRANSACTION_ACK), (_topic, payload) => {
       capturedAck = JSON.parse(payload.toString());
     });
 
@@ -81,7 +81,12 @@ describe('Phase 2 E2E Payment & Dispense Flow', () => {
     expect(capturedQr.qr_string).toContain('000201010212');
     const tranId = capturedQr.tran_id;
 
-    // Step 2: PayWay Webhook callback arrives
+    // Step 2: Customer pays on ABA Mobile -> gateway has approved transaction -> PayWay Webhook callback arrives
+    const gateway = app.get('PaymentGateway') as any;
+    if (gateway && typeof gateway.setTransactionStatus === 'function') {
+      gateway.setTransactionStatus(tranId, 'approved', 'APV_E2E_CONFIRMED');
+    }
+
     const callbackRes = await app.inject({
       method: 'POST',
       url: '/v1/payway/callback',

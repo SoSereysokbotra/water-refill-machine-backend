@@ -78,7 +78,7 @@ describe('Phase 1 Platform E2E Smoke & Event Pipeline', () => {
     const receivedPayloads: string[] = [];
 
     // 1. Subscribe to MQTT topic
-    mqttService.subscribe(targetTopic, (_topic, payload) => {
+    await mqttService.subscribe(targetTopic, (_topic, payload) => {
       receivedPayloads.push(payload.toString());
     });
 

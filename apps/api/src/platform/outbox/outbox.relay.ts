@@ -62,7 +62,7 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
         if (match) {
           await match.handler(event);
         } else {
-          this.logger.warn(`No handler registered for [${handlerName}] on event [${event.type}]`);
+          throw new Error(`Handler [${handlerName}] not found for event [${event.type}] on this worker`);
         }
       },
       { concurrency: 20 },
