@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import {
   buildMachineTopic,
+  ErrorV1Schema,
   MQTT_TOPICS,
   parsePayRequestPayload,
   parseTransactionPayload,
@@ -36,7 +37,8 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     await this.mqtt.subscribe('wrm/+/pay/request', this.onPayRequest.bind(this));
     await this.mqtt.subscribe('wrm/+/pay/cancel', this.onPayCancel.bind(this));
     await this.mqtt.subscribe('wrm/+/transaction', this.onTransaction.bind(this));
-    this.logger.log('PaymentsMqttConsumer subscribed to pay/request, pay/cancel, transaction');
+    await this.mqtt.subscribe('wrm/+/error', this.onError.bind(this));
+    this.logger.log('PaymentsMqttConsumer subscribed to pay/request, pay/cancel, transaction, error');
   }
 
   private parseJson(payload: Buffer): unknown {
@@ -156,6 +158,47 @@ export class PaymentsMqttConsumer implements OnModuleInit {
         this.logger.error(`Infrastructure error processing dispense for ${parsed.data.tran_id}: ${(err as Error).message}`);
         // No ack on infrastructure error -> device retries with backoff (B4.7)
       }
+    }
+  }
+
+  async onError(topic: string, payload: Buffer): Promise<void> {
+    const parts = topic.split('/');
+    const machineId = parts[1];
+    if (!machineId) return;
+
+    const raw = this.parseJson(payload);
+    const parsed = ErrorV1Schema.safeParse(raw);
+    if (!parsed.success) {
+      this.logger.warn(`Invalid error payload from ${machineId}: ${JSON.stringify(raw)}`);
+      return;
+    }
+
+    const { fault, tran_id, ts } = parsed.data;
+    if (tran_id) {
+      // Per Plan D6: error messages with a tran_id are converted to RecordDispense(result='error', flow_ml=0, fault)
+      try {
+        await this.recordDispenseHandler.execute(
+          new RecordDispenseCommand(machineId, {
+            v: 1,
+            tran_id,
+            result: 'error',
+            flow_ml: 0,
+            weight_g: 0,
+            fault,
+            ts,
+          }),
+        );
+        await this.publishAck(machineId, tran_id, 'ok');
+      } catch (err: unknown) {
+        const code = toErrorCode(err);
+        if (['DSP_NOT_PAID', 'DSP_WRONG_MACHINE', 'DSP_UNKNOWN_PAYMENT'].includes(code)) {
+          await this.repo.recordRejection(machineId, tran_id, code, raw);
+          await this.publishAck(machineId, tran_id, 'rejected', code);
+        }
+      }
+    } else {
+      // Without tran_id, error goes to Monitoring only
+      this.logger.warn(`Machine ${machineId} reported fault [${fault}] with no tran_id`);
     }
   }
 

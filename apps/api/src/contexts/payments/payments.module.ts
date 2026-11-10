@@ -4,14 +4,20 @@ import { SweepsScheduler } from '../../platform/sweeps/sweeps.scheduler';
 import { SystemClock, TranIdGenerator } from '../../shared-kernel';
 import {
   CancelPaymentHandler,
+  ClaimRefundCaseHandler,
   ConfirmPaymentHandler,
   CreatePaymentHandler,
+  DispensingSweep,
   ExpirePaymentHandler,
   FailPaymentHandler,
+  MarkRefundedHandler,
   PaymentsSweep,
   ProbePaymentHandler,
   ReconcileSweep,
   RecordDispenseHandler,
+  RejectRefundHandler,
+  ReopenRefundHandler,
+  ResolveUnknownDispenseHandler,
 } from './application';
 import {
   MockPayWayGateway,
@@ -24,10 +30,11 @@ import {
   PaymentOutboxHandlers,
   PaymentsController,
   PaymentsMqttConsumer,
+  RefundCasesController,
 } from './interface';
 
 @Module({
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, RefundCasesController],
   providers: [
     TranIdGenerator,
     {
@@ -62,9 +69,15 @@ import {
     FailPaymentHandler,
     ProbePaymentHandler,
     RecordDispenseHandler,
+    ClaimRefundCaseHandler,
+    MarkRefundedHandler,
+    RejectRefundHandler,
+    ReopenRefundHandler,
+    ResolveUnknownDispenseHandler,
     // Sweeps
     PaymentsSweep,
     ReconcileSweep,
+    DispensingSweep,
     // Interface components
     PaymentOutboxHandlers,
     PaymentsMqttConsumer,
@@ -81,8 +94,14 @@ import {
     FailPaymentHandler,
     ProbePaymentHandler,
     RecordDispenseHandler,
+    ClaimRefundCaseHandler,
+    MarkRefundedHandler,
+    RejectRefundHandler,
+    ReopenRefundHandler,
+    ResolveUnknownDispenseHandler,
     PaymentsSweep,
     ReconcileSweep,
+    DispensingSweep,
   ],
 })
 export class PaymentsModule implements OnModuleInit {
@@ -90,6 +109,7 @@ export class PaymentsModule implements OnModuleInit {
     @Inject(SweepsScheduler) private readonly sweepsScheduler: SweepsScheduler,
     @Inject(PaymentsSweep) private readonly paymentsSweep: PaymentsSweep,
     @Inject(ReconcileSweep) private readonly reconcileSweep: ReconcileSweep,
+    @Inject(DispensingSweep) private readonly dispensingSweep: DispensingSweep,
   ) {}
 
   onModuleInit(): void {
@@ -106,6 +126,14 @@ export class PaymentsModule implements OnModuleInit {
       everyMs: typeof this.reconcileSweep.cronOrInterval === 'number' ? this.reconcileSweep.cronOrInterval : 300000,
       processor: async () => {
         await this.reconcileSweep.execute();
+      },
+    });
+
+    this.sweepsScheduler.registerSchedule({
+      name: this.dispensingSweep.name,
+      everyMs: typeof this.dispensingSweep.cronOrInterval === 'number' ? this.dispensingSweep.cronOrInterval : 30000,
+      processor: async () => {
+        await this.dispensingSweep.execute();
       },
     });
   }
