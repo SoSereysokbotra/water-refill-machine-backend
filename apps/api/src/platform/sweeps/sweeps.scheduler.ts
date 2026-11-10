@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Logger, Inject } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnApplicationBootstrap, Logger, Inject } from '@nestjs/common';
 import { QueueService } from '../queues/queue.service';
 import { ConfigService } from '../config/config.service';
 import { Queue } from 'bullmq';
@@ -11,7 +11,7 @@ export interface RepeatableScheduleDef {
 }
 
 @Injectable()
-export class SweepsScheduler implements OnModuleInit {
+export class SweepsScheduler implements OnModuleInit, OnApplicationBootstrap {
   private readonly logger = new Logger(SweepsScheduler.name);
   private sweepQueue!: Queue;
   private readonly registeredSchedules: RepeatableScheduleDef[] = [];
@@ -22,7 +22,19 @@ export class SweepsScheduler implements OnModuleInit {
   ) {}
 
   registerSchedule(schedule: RepeatableScheduleDef): void {
-    this.registeredSchedules.push(schedule);
+    const existingIndex = this.registeredSchedules.findIndex((s) => s.name === schedule.name);
+    if (existingIndex >= 0) {
+      this.registeredSchedules[existingIndex] = schedule;
+    } else {
+      this.registeredSchedules.push(schedule);
+    }
+
+    if (this.sweepQueue) {
+      this.upsertSchedule(schedule).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Failed to upsert schedule [${schedule.name}]: ${msg}`);
+      });
+    }
   }
 
   async onModuleInit() {
@@ -41,7 +53,13 @@ export class SweepsScheduler implements OnModuleInit {
         if (schedule) {
           await schedule.processor();
         } else {
-          this.logger.warn(`No schedule handler found for repeatable job [${job.name}]`);
+          this.logger.warn(`No schedule handler found for repeatable job [${job.name}], removing from Redis`);
+          try {
+            await this.sweepQueue.removeJobScheduler(`scheduler:${job.name}`);
+            await this.sweepQueue.removeJobScheduler(job.name);
+          } catch {
+            // ignore
+          }
         }
       },
       { concurrency: 5 },
@@ -50,23 +68,40 @@ export class SweepsScheduler implements OnModuleInit {
     await this.upsertAllSchedulers();
   }
 
+  async onApplicationBootstrap() {
+    const runMode = this.config.get('RUN_MODE');
+    if (runMode === 'api') {
+      return;
+    }
+    await this.upsertAllSchedulers();
+  }
+
   async upsertAllSchedulers(): Promise<void> {
+    if (!this.sweepQueue) {
+      return;
+    }
+
     this.logger.log(`Upserting ${this.registeredSchedules.length} repeatable sweep schedules into Redis...`);
     for (const schedule of this.registeredSchedules) {
-      if (schedule.everyMs) {
-        await this.sweepQueue.upsertJobScheduler(
-          `scheduler:${schedule.name}`,
-          { every: schedule.everyMs },
-          { name: schedule.name },
-        );
-      } else if (schedule.cronPattern) {
-        await this.sweepQueue.upsertJobScheduler(
-          `scheduler:${schedule.name}`,
-          { pattern: schedule.cronPattern },
-          { name: schedule.name },
-        );
-      }
+      await this.upsertSchedule(schedule);
     }
     this.logger.log('All sweep schedules registered.');
+  }
+
+  private async upsertSchedule(schedule: RepeatableScheduleDef): Promise<void> {
+    if (!this.sweepQueue) return;
+    if (schedule.everyMs) {
+      await this.sweepQueue.upsertJobScheduler(
+        `scheduler:${schedule.name}`,
+        { every: schedule.everyMs },
+        { name: schedule.name },
+      );
+    } else if (schedule.cronPattern) {
+      await this.sweepQueue.upsertJobScheduler(
+        `scheduler:${schedule.name}`,
+        { pattern: schedule.cronPattern },
+        { name: schedule.name },
+      );
+    }
   }
 }

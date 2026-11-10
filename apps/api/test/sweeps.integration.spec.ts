@@ -16,6 +16,12 @@ describe('SweepsScheduler & FLUSHALL Resilience (Integration)', () => {
   });
 
   afterAll(async () => {
+    try {
+      const sweepQueue = queues.getQueue('sweeps.repeatable');
+      await sweepQueue.removeJobScheduler('scheduler:sweep.test-resilience');
+    } catch {
+      // ignore
+    }
     await queues.onModuleDestroy();
   });
 

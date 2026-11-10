@@ -90,6 +90,7 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     }
     if (this.connection) {
       await this.connection.quit();
+      this.connection = undefined;
     }
     this.logger.log('All queues and workers closed.');
   }
