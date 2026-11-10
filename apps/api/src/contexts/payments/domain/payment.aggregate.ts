@@ -1,14 +1,23 @@
 import { AggregateRoot, Clock, DomainError } from '../../../shared-kernel';
 import {
+  dispenseCompletedEvent,
+  dispenseFailedEvent,
+  dispenseOutcomeUnknownEvent,
   latePaymentDetectedEvent,
   paymentCancelledEvent,
   paymentCreatedEvent,
   paymentExpiredEvent,
   paymentFailedEvent,
   paymentPaidEvent,
+  paymentRefundedEvent,
+  reconciliationNeededEvent,
+  refundClaimedEvent,
+  refundRejectedEvent,
+  refundReopenedEvent,
   refundReviewOpenedEvent,
 } from './payment.events';
 import { Currency, PaymentProps, PaymentStatus } from './payment.types';
+import { calculateSuggestedRefund } from './refund-policy';
 
 export interface StateChangeAudit {
   fromStatus: PaymentStatus;
@@ -241,25 +250,205 @@ export class Payment extends AggregateRoot {
     );
   }
 
-  recordDispense(result: 'ok' | 'partial' | 'error', clock: Clock): void {
-    if (this._status === 'PAID') {
+  recordOutcome(params: {
+    result: 'ok' | 'partial' | 'error';
+    flowMl: number;
+    weightG: number;
+    diffPercent: number;
+    fault?: string | null;
+    clock: Clock;
+  }): { isLate: boolean; suggestedRefundMinor: number } {
+    const { result, flowMl, weightG, diffPercent, fault, clock } = params;
+
+    // If already finalized (DISPENSED, REFUNDED, REFUND_REJECTED) -> late outcome per C1
+    if (this._status === 'DISPENSED' || this._status === 'REFUNDED' || this._status === 'REFUND_REJECTED') {
+      this.raise(
+        reconciliationNeededEvent(
+          {
+            tranId: this.tranId,
+            currentStatus: this._status,
+            lateOutcome: { result, flowMl, weightG, fault },
+          },
+          clock.now(),
+        ),
+      );
+      return { isLate: true, suggestedRefundMinor: 0 };
+    }
+
+    let suggestedRefundMinor = 0;
+
+    if (this._status === 'PAID' || this._status === 'DISPENSE_UNKNOWN') {
       if (result === 'ok') {
         this.transition('DISPENSED', 'dispense ok', clock);
+        this.raise(
+          dispenseCompletedEvent(
+            {
+              tranId: this.tranId,
+              machineId: this.machineId,
+              flowMl,
+              weightG,
+              diffPercent,
+            },
+            clock.now(),
+          ),
+        );
       } else {
-        const reason = result === 'partial' ? 'DISPENSE_PARTIAL' : 'DISPENSE_FAILED';
-        this.transition('REFUND_REVIEW', `dispense ${result}`, clock);
+        const reasonCode = result === 'partial' ? 'DISPENSE_PARTIAL' : 'DISPENSE_FAILED';
+        suggestedRefundMinor = calculateSuggestedRefund({
+          reason: reasonCode,
+          amountMinor: this.amountMinor,
+          volumeMl: this.volumeMl,
+          flowMl,
+          currency: this.currency,
+          fault: fault ?? undefined,
+        });
+
+        this.transition('REFUND_REVIEW', `dispense ${result} (${fault ?? 'no_fault'})`, clock);
+        this.raise(
+          dispenseFailedEvent(
+            {
+              tranId: this.tranId,
+              machineId: this.machineId,
+              result,
+              flowMl,
+              weightG,
+              fault: fault ?? undefined,
+            },
+            clock.now(),
+          ),
+        );
         this.raise(
           refundReviewOpenedEvent(
             {
               tranId: this.tranId,
-              reason,
-              suggestedAmountMinor: this.amountMinor,
+              reason: reasonCode,
+              suggestedAmountMinor: suggestedRefundMinor,
             },
             clock.now(),
           ),
         );
       }
     }
+
+    return { isLate: false, suggestedRefundMinor };
+  }
+
+  // Backward compatibility alias for Phase 2 tests
+  recordDispense(result: 'ok' | 'partial' | 'error', clock: Clock): void {
+    this.recordOutcome({
+      result,
+      flowMl: result === 'ok' ? this.volumeMl : 0,
+      weightG: result === 'ok' ? this.volumeMl : 0,
+      diffPercent: 0,
+      clock,
+    });
+  }
+
+  markDispenseUnknown(clock: Clock): void {
+    if (this._status !== 'PAID') return;
+    this.transition('DISPENSE_UNKNOWN', 'dispense outcome unknown (timeout 300s)', clock);
+    this.raise(
+      dispenseOutcomeUnknownEvent(
+        {
+          tranId: this.tranId,
+          machineId: this.machineId,
+        },
+        clock.now(),
+      ),
+    );
+  }
+
+  escalateUnknownToRefundReview(clock: Clock): void {
+    if (this._status !== 'DISPENSE_UNKNOWN') return;
+    this.transition('REFUND_REVIEW', 'dispense unknown escalated (24h online)', clock);
+    this.raise(
+      refundReviewOpenedEvent(
+        {
+          tranId: this.tranId,
+          reason: 'DISPENSE_UNKNOWN_ESCALATED',
+          suggestedAmountMinor: this.amountMinor,
+        },
+        clock.now(),
+      ),
+    );
+  }
+
+  claimRefund(adminId: string, durationMinutes: number, clock: Clock): void {
+    if (this._status !== 'REFUND_REVIEW') {
+      throw new DomainError('PAY_INVALID_STATE', `Cannot claim refund in status ${this._status}`);
+    }
+    const until = new Date(clock.now().getTime() + durationMinutes * 60 * 1000);
+    this.raise(
+      refundClaimedEvent(
+        {
+          tranId: this.tranId,
+          by: adminId,
+          until,
+        },
+        clock.now(),
+      ),
+    );
+  }
+
+  markRefunded(params: {
+    adminId: string;
+    method: string;
+    reference: string;
+    amountMinor: number;
+    clock: Clock;
+  }): void {
+    if (this._status !== 'REFUND_REVIEW') {
+      throw new DomainError('PAY_INVALID_STATE', `Cannot mark refunded in status ${this._status}`);
+    }
+    this.transition('REFUNDED', `refunded via ${params.method} (${params.reference})`, params.clock);
+    this.refundedAmountMinor = params.amountMinor;
+    this.refundedAt = params.clock.now();
+    this.raise(
+      paymentRefundedEvent(
+        {
+          tranId: this.tranId,
+          by: params.adminId,
+          amountMinor: params.amountMinor,
+          reference: params.reference,
+          method: params.method,
+        },
+        params.clock.now(),
+      ),
+    );
+  }
+
+  rejectRefund(adminId: string, reason: string, clock: Clock): void {
+    if (this._status !== 'REFUND_REVIEW') {
+      throw new DomainError('PAY_INVALID_STATE', `Cannot reject refund in status ${this._status}`);
+    }
+    this.transition('REFUND_REJECTED', reason, clock);
+    this.raise(
+      refundRejectedEvent(
+        {
+          tranId: this.tranId,
+          by: adminId,
+          reason,
+        },
+        clock.now(),
+      ),
+    );
+  }
+
+  reopenRefund(adminId: string, reason: string, clock: Clock): void {
+    if (this._status !== 'REFUND_REJECTED') {
+      throw new DomainError('PAY_INVALID_STATE', `Cannot reopen refund in status ${this._status}`);
+    }
+    this.transition('REFUND_REVIEW', `reopened by ${adminId}: ${reason}`, clock);
+    this.raise(
+      refundReopenedEvent(
+        {
+          tranId: this.tranId,
+          by: adminId,
+          reason,
+        },
+        clock.now(),
+      ),
+    );
   }
 
   scheduleNextAbaCheck(nextCheckAt: Date | null, clock: Clock): void {

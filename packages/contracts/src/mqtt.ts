@@ -134,3 +134,11 @@ export const TransactionAckV1Schema = z.object({
   reason: z.string().optional(),
 });
 export type TransactionAckV1 = z.infer<typeof TransactionAckV1Schema>;
+
+export const ErrorV1Schema = z.object({
+  v: z.literal(1).default(1),
+  fault: z.string(),
+  tran_id: z.string().max(20).optional(),
+  ts: z.number().optional(),
+});
+export type ErrorV1 = z.infer<typeof ErrorV1Schema>;
