@@ -172,6 +172,36 @@ Starts NestJS Fastify on `http://localhost:3000` with Outbox Relay and Sweeps ac
   curl http://localhost:3000/v1/payments/<TRAN_ID>
   ```
 
+### Step 6: Visual UI Testing Tools
+
+You can test Phase 2 end-to-end visually using any of the following graphical interfaces:
+
+1. **Interactive Payment & QR Test Dashboard (Built-in Web UI)**:
+   - Navigate to **`http://localhost:3000/dev`** in any web browser.
+   - Choose a machine (`WRM-001` or `WRM-900`) and water volume (500 mL, 750 mL, or 1000 mL).
+   - Click **"Generate Dynamic KHQR"** to trigger a real payment request.
+   - Scan the rendered QR code directly on screen with the ABA Mobile Sandbox app, or click **"Simulate Pay Approval"** to simulate an instant webhook confirmation.
+   - Click **"Simulate Dispense Complete"** to simulate the physical machine completing water dispensation.
+   - Watch the live status badge poll and transition seamlessly: `PENDING` 🟡 -> `PAID` 🟢 -> `DISPENSED` 💧.
+
+2. **Prisma Studio (Database GUI)**:
+   - Run in a terminal:
+     ```powershell
+     pnpm --filter @wrm/api db:studio
+     ```
+   - Open **`http://localhost:5555`** to visually inspect, search, and browse:
+     - `payments` table (amounts, QR strings, status, timestamps)
+     - `payment_events` (audit log of every state transition)
+     - `dispenses` (flow meter & load cell sensor accuracy recordings)
+     - `refund_cases` & `dispense_rejections`
+
+3. **MQTT Explorer**:
+   - Connect to `localhost:1883` and subscribe to `wrm/#`.
+   - Observe live MQTT messages on `wrm/WRM-001/pay/request`, `wrm/WRM-001/pay/qr`, `wrm/WRM-001/pay/status`, `wrm/WRM-001/transaction`, and `wrm/WRM-001/transaction/ack`.
+
+4. **Production Operator Dashboard (Phase 7)**:
+   - Note that the full customer/operator management portal is slated for Phase 7 as a dedicated Next.js application.
+
 ---
 
 ## 4. Hardware & Prototype Cut-Over Checklist `[HUMAN]`
