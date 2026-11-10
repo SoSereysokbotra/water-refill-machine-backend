@@ -286,4 +286,4 @@ docker exec -i infra-mosquitto-1 mosquitto_pub -h localhost -p 1883 \
 | `docs/PROGRESS.md` updated with handoff note | ✅ Done | Section 6 updated |
 
 > [!NOTE]
-> All changes are committed locally on git branch `phase3`. Per project instructions, the branch has **NOT** been pushed to GitHub so that you can run your manual validation and tests first.
+> All changes are committed and pushed to git branch `phase3`.

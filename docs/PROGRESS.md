@@ -12,7 +12,7 @@
 | **Current phase** | **Phase 3: Dispensing & refund review** (automated done, awaiting manual hardware check) |
 | **Next action** | Run physical hardware check for ESP32 v0.4.0 NVS queue (see `readmePhase3.md`), then prepare for Phase 3.5 |
 | **Last updated** | 2026-11-10 by Backend developer |
-| **Last commit** | `647b832` (branch `phase3`, local unpushed) |
+| **Last commit** | `phase3` (pushed to `origin/phase3`) |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
