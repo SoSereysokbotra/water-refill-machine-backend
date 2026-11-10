@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 2: Payments** (automated done, awaiting manual hardware check) |
-| **Next action** | Run cut-over hardware check with ABA simulator and ESP32 (see `readmePhase2.md`), then stop prototype |
+| **Current phase** | **Phase 3: Dispensing & refund review** (automated done, awaiting manual hardware check) |
+| **Next action** | Run physical hardware check for ESP32 v0.4.0 NVS queue (see `readmePhase3.md`), then prepare for Phase 3.5 |
 | **Last updated** | 2026-11-10 by Backend developer |
-| **Last commit** | `f6990d0` (pushed to `origin/phase2`) |
+| **Last commit** | `7928b55` (branch `phase3`, local unpushed) |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -31,7 +31,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 | 0 | Foundations | ✅ | Backend developer | 2026-11-08 | 2026-11-09 | `c3c6c54` |
 | 1 | Platform | ✅ | Backend developer | 2026-11-09 | 2026-11-09 | `phase1` |
 | 2 | Payments | 🟦 | Backend developer | 2026-11-10 | | `phase2` |
-| 3 | Dispensing & refund review | ⬜ | | | | |
+| 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
 | 3.5 | Early pilot | ⬜ | | | | |
 | 4 | Fleet | ⬜ | | | | |
 | 5 | Monitoring | ⬜ | | | | |
@@ -50,7 +50,14 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
 
-### Phase 2: Payments
+### Phase 3: Dispensing & refund review
+- [x] Every PAID payment ends in DISPENSED, REFUNDED or REFUND_REJECTED — none refunded while outcome unknown
+- [ ] `[MANUAL CHECK]` Outcomes survive ESP32 reboot, STM32 reboot and 2 h offline
+- [x] No infinite replay: every outcome is acked `ok` or `rejected`, or expires by policy (counted)
+- [x] Two operators cannot refund the same case
+- [x] `PROGRESS.md` updated with handoff note
+
+### Phase 2: Payments (awaiting manual hardware check)
 - [ ] `[MANUAL CHECK]` Real ESP32: `1` → QR → ABA simulator pay → `PAID` → `DONE` → **`transaction/ack` received**, on the new backend
 - [x] 20 parallel `pay/request` for one machine leave exactly one open payment
 - [x] With the callback endpoint disabled, payments still confirm via sweeps, and a late payment is found by reconcile
@@ -87,6 +94,7 @@ Things an AI agent can't do. A person does them, then ticks the box.
 | Hardware developer reviews 📝 draft docs and fills in TBD (STM32 model, pins, prices) | 0 | Hardware developer | ⬜ |
 | Enable branch protection on `main` | 0 | Backend developer | ⬜ |
 | Real ESP32 cut-over test: 1 -> QR -> ABA simulator pay -> PAID -> DONE -> transaction/ack (see readmePhase2.md) | 2 | Backend / Hardware developer | ⬜ |
+| Real ESP32 NVS queue test: simulate offline dispense, reboot ESP32, verify outcome replay & draining (see readmePhase3.md) | 3 | Backend / Hardware developer | ⬜ |
 
 ---
 
@@ -130,6 +138,60 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-10: Phase 3 (Dispensing & refund review automated complete, awaiting hardware check) by Backend developer
+
+**Done this session**
+- Task 1 (Domain & Contracts):
+  - Added `ErrorV1Schema` in `@wrm/contracts` for hardware error topic `wrm/+/error`.
+  - Implemented ADR-0008 refund calculation in `refund-policy.ts` with minor-unit floor rounding for partial dispenses, 0 for ok, 100% for error.
+  - Implemented dual-sensor accuracy tracking ($|\text{flow} - \text{weight}| / \text{volume} \times 100$, $>5\%$ threshold flag) in `dispense.entity.ts`.
+  - Implemented `RefundCase` aggregate (`claim`, `markRefunded`, `reject`, `reopen`, 30-min expiration, concurrency lock).
+  - Extended `Payment` aggregate with `recordOutcome`, `markDispenseUnknown` (past 300s), `escalateUnknownToRefundReview` (after 24h), `claimRefund`, `markRefunded`, `rejectRefund`, `reopenRefund`, and late outcome handling without corrupting terminal states.
+  - Unit tests: 15 domain unit tests created and passing (`test/phase3-domain.spec.ts`).
+- Task 2 (Prisma Repository & Application):
+  - Extended `PaymentRepository` port and `PrismaPaymentRepository` with `recordDispense`, `saveRefundCase`, `getRefundCase`, `findRefundCases`, `findDueForDispenseUnknown`, `findDueForUnknownEscalation`, and `getMachinePendingOutcomes`.
+  - Implemented `RecordDispenseHandler` with dual-sensor validation, clock skew check (>300s), late outcome reconcile generation, and outbox event publishing (`dispensing.DispenseCompleted`, `dispensing.DispenseFailed`, `dispensing.AccuracyMismatch`).
+  - Implemented `DispensingSweep` (`sweep.dispensing`, 30s interval): moves `PAID` past 300s to `DISPENSE_UNKNOWN`, escalates `DISPENSE_UNKNOWN` past 24h to `REFUND_REVIEW` only when machine reports `pending_outcomes === 0`.
+  - Implemented refund command handlers (`ClaimRefundCaseHandler`, `MarkRefundedHandler`, `RejectRefundHandler`, `ReopenRefundHandler`, `ResolveUnknownDispenseHandler`).
+  - Enforced Plan §C1 safety guard: `MarkRefundedHandler` blocks refunds with `REFUND_BLOCKED_PENDING_OUTCOMES` if `pending_outcomes > 0` unless `adminOverrideReason` is provided.
+- Task 3 (Interface):
+  - Subscribed MQTT consumer to `wrm/+/error` and `wrm/+/transaction`. Records unrecognized or foreign outcomes into `dispense_rejections` table and sends permanent `transaction/ack rejected`.
+  - Implemented REST controller `RefundCasesController` (`/v1/refund-cases`, `/claim`, `/mark-refunded`, `/reject`, `/reopen`, `/payments/:tranId/resolve-unknown`).
+  - Mapped domain `ConflictError` to HTTP 409 in `GlobalExceptionFilter`.
+- Task 4 (ESP32 Firmware v0.4.0):
+  - Updated `firmware/esp32-gateway/src/main.cpp` with persistent NVS outcome queue (`Preferences`, capacity 64, max age 7 days, exponential backoff with jitter).
+  - Only sends `ACK,<tran_id>` UART reply to STM32 after outcome is safely committed to NVS flash memory.
+  - Continuously repeats `PAID,<tran_id>,<volume_ml>` every 2s until `PAID,ACK` or `PAID,REJECT` received.
+  - Emits telemetry counters: `pending_outcomes`, `rejected_outcomes`, `dropped_outcomes` in heartbeats.
+- Task 5 (Verification & Documentation):
+  - Authored comprehensive verification guide in `readmePhase3.md`.
+  - Integration & E2E tests: Added `dispensing-sweeps.integration.spec.ts` (3 tests) and `refund-flow.e2e.spec.ts` (4 tests).
+  - Full test suite: 19 test files, 79 tests passing.
+  - Architecture boundaries: 0 depcruise violations across 109 modules.
+  - ESLint: 0 errors.
+  - Git branch: `phase3` maintained locally (unpushed) per instructions.
+
+**Not finished / next steps** (in order)
+1. Run `[MANUAL CHECK]` for ESP32 v0.4.0 NVS queue (unplug Wi-Fi during dispense, reboot ESP32, verify outcome drained on reconnect).
+2. Proceed to Phase 3.5: Early pilot (minimal production environment on VPS, Caddy, managed Postgres, WRM-001 provisioning).
+
+**Changed from the plan**
+- None.
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- `pnpm test` → 19 test files, 79 tests passing.
+- `pnpm --filter @wrm/api depcruise` → 0 architecture boundary violations (109 modules, 332 dependencies).
+- `pnpm run lint` → 0 ESLint errors.
+- See `readmePhase3.md` for complete manual testing scenarios.
+
+**Needs from a person**
+- Flash ESP32 with firmware v0.4.0 and test the offline NVS queue reboot resilience (`[MANUAL CHECK]` in Section 4).
 
 ---
 
