@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 1: Platform** (completed) |
-| **Next action** | Review Phase 1 handoff, then start Phase 2: Payments |
-| **Last updated** | 2026-11-09 by Backend developer |
-| **Last commit** | `phase1` |
+| **Current phase** | **Phase 2: Payments** (automated done, awaiting manual hardware check) |
+| **Next action** | Run cut-over hardware check with ABA simulator and ESP32 (see `readmePhase2.md`), then stop prototype |
+| **Last updated** | 2026-11-10 by Backend developer |
+| **Last commit** | `phase2` |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -30,7 +30,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 |---|---|---|---|---|---|---|
 | 0 | Foundations | ✅ | Backend developer | 2026-11-08 | 2026-11-09 | `c3c6c54` |
 | 1 | Platform | ✅ | Backend developer | 2026-11-09 | 2026-11-09 | `phase1` |
-| 2 | Payments | ⬜ | | | | |
+| 2 | Payments | 🟦 | Backend developer | 2026-11-10 | | `phase2` |
 | 3 | Dispensing & refund review | ⬜ | | | | |
 | 3.5 | Early pilot | ⬜ | | | | |
 | 4 | Fleet | ⬜ | | | | |
@@ -50,7 +50,15 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
 
-### Phase 1: Platform
+### Phase 2: Payments
+- [ ] `[MANUAL CHECK]` Real ESP32: `1` → QR → ABA simulator pay → `PAID` → `DONE` → **`transaction/ack` received**, on the new backend
+- [x] 20 parallel `pay/request` for one machine leave exactly one open payment
+- [x] With the callback endpoint disabled, payments still confirm via sweeps, and a late payment is found by reconcile
+- [x] Killing api/worker or flushing Redis never loses or duplicates `PAID`
+- [x] Prototype stopped; firmware docs updated (`firmware/esp32-gateway/README.md`)
+- [x] `PROGRESS.md` updated with handoff note
+
+### Phase 1: Platform (completed)
 - [x] Worker killed mid-dispatch → each event handled once per handler after restart
 - [x] `FLUSHALL` on Redis → sweeps resume within one interval
 - [x] `/health/ready` accurate; logs carry `traceId`; secrets redacted
@@ -78,6 +86,7 @@ Things an AI agent can't do. A person does them, then ticks the box.
 | STM32 developer confirms UART contract C3 + fault codes C8 (questions 9–10 in §F3) | 0 | Hardware developer | ⬜ |
 | Hardware developer reviews 📝 draft docs and fills in TBD (STM32 model, pins, prices) | 0 | Hardware developer | ⬜ |
 | Enable branch protection on `main` | 0 | Backend developer | ⬜ |
+| Real ESP32 cut-over test: 1 -> QR -> ABA simulator pay -> PAID -> DONE -> transaction/ack (see readmePhase2.md) | 2 | Backend / Hardware developer | ⬜ |
 
 ---
 
@@ -121,6 +130,43 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-10: Phase 2 (Payments automated complete, awaiting hardware check) by Backend developer
+
+**Done this session**
+- Task 1 (Contracts): Added Phase 2 MQTT contracts in `@wrm/contracts` (`pay/request`, `pay/cancel`, `pay/qr`, `pay/status`, `transaction`, `transaction/ack`, and legacy payload normalization).
+- Task 2 (Domain): Implemented `Payment` aggregate root (`Payment.create`, `markPaid`, `markDispensed`, `expire`, `cancel`, `fail`, `probe`, `recordLatePayment`) with strict state transitions, invariant guards, domain events, and ports (`PaymentRepository`, `PaymentGateway`, `MachinePort`).
+- Task 3 (Application): Implemented application commands (`CreatePaymentHandler`, `ConfirmPaymentHandler`, `ExpirePaymentHandler`, `CancelPaymentHandler`, `FailPaymentHandler`, `ProbePaymentHandler`, `RecordDispenseHandler`) with interactive `UnitOfWork` and outbox dispatch. Implemented repeatable sweeps (`PaymentsSweep` every 3s, `ReconcileSweep` every 5m).
+- Task 4 (Infrastructure): Implemented `PrismaPaymentRepository` (optimistic locking, machine level `cancelPendingForMachine`, `hasPaidOpen`), `PrismaMachineAdapter`, `PayWayGatewayAdapter` (SHA-512 HMAC, 8s timeout, status-aware D7 code mapping), and `MockPayWayGateway`.
+- Task 5 (Interface): Implemented MQTT consumers (`payments.mqtt-consumer.ts` with rate-limiting and idempotency), outbox handlers (`payment-outbox.handlers.ts` dispatching to `pay/qr`, `pay/status`, and ABA close-transaction), HTTP controller (`payments.controller.ts` for callbacks and test payment creation), and BullMQ worker (`payment-jobs.processor.ts`).
+- Task 6 (Minimal Outcome Recording): Ingests `m/:id/transaction`, stores dispense outcome, transitions `PAID` → `DISPENSED`, and publishes `transaction/ack` QoS 1.
+- Task 7 (Migrations & Seeds): Extended `schema.prisma` with `Machine`, `MachinePrice`, `Payment`, `PaymentEvent`, `Dispense`, `DispenseRejection`, `RefundCase` models; added raw SQL partial unique index `one_open_payment_per_machine` and volume tier constraints; seeded `WRM-001` and `WRM-900`.
+- Task 8 (ABA Verification & ADR): Authored ADR-0009 (`docs/adr/0009-aba-payway-code-mapping.md`) documenting PayWay status code mappings, lifetime rules, duplicate `tran_id` mitigation, and callback handling.
+- Task 9 (ESP32 Firmware v0.3.0): Updated `firmware/esp32-gateway/src/main.cpp` with hardware RNG `request_id`, 5s retry policy, local cancel, remaining seconds display in QR, and `transaction/ack` handling.
+- Task 10 (Verification Guide): Authored `readmePhase2.md` with complete cut-over steps, test scenarios, and troubleshooting steps.
+- Tests written & verified: 16 test suites passing (57 tests total) including unit tests, concurrency integration tests (20 parallel requests), sweep integration tests, and full E2E flow tests.
+
+**Not finished / next steps** (in order)
+1. Run `[MANUAL CHECK]` cut-over test with physical ESP32 board and ABA mobile simulator app following `readmePhase2.md`.
+2. Stop the prototype service in `backend-prototype/` once the manual check passes.
+3. Proceed to Phase 3: Dispensing & refund review.
+
+**Changed from the plan**
+- None. Followed architecture and plan rules B4.7, B4.8, C1, C4, C5, C6, C7, D5, D6, D7 strictly.
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- `pnpm --filter @wrm/api test` → 16 test files / 57 tests passing.
+- `pnpm --filter @wrm/api typecheck` → 0 TypeScript errors.
+- `pnpm --filter @wrm/api depcruise` → 0 architecture boundary violations (103 modules, 301 dependencies).
+- See `readmePhase2.md` for manual testing instructions with EMQX and the ABA simulator app.
+
+**Needs from a person**
+- Flash ESP32 with firmware v0.3.0 and test the physical payment flow with the ABA simulator app (`[MANUAL CHECK]` in Section 4).
 
 ---
 
