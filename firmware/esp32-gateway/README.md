@@ -1,10 +1,16 @@
-# ESP32 Gateway (WROOM-32)
+# ESP32 Gateway (WROOM-32) — Firmware v0.4.0
 
 Connects the machine to the cloud. The ESP32 talks **MQTT (TLS)** to the EMQX Cloud broker and **UART** to the STM32. It never drives the pump or sensors — that is the STM32's job.
 
 ```text
 STM32 (control)  <--UART2 (GPIO16/17)-->  ESP32 (this)  <--MQTT/TLS 8883-->  EMQX Cloud  <-->  Backend
 ```
+
+### v0.4.0 Highlights (Phase 3: Dispensing & Outcome Queue)
+- **Non-Volatile Storage (NVS) Outcome Queue**: Outcomes (`DONE`, `PARTIAL`, `ERR` with `tran_id`) are persisted to ESP32 Flash memory before sending `ACK,<tran_id>` to the STM32. Outcomes survive ESP32 reboots and power losses.
+- **Application Retry with Backoff**: Outcomes in the NVS queue are retried with exponential backoff (5s to 5min + jitter) until confirmed with `transaction/ack ok` or `rejected`.
+- **Periodic `PAID` Repeating**: `PAID,<tran_id>` is repeated every 2s until acknowledged by the STM32 via `PAID,ACK,<tran_id>` or `PAID,REJECT,<tran_id>,<fault>`.
+- **Heartbeat Telemetry Counters**: Broadcasts `pending_outcomes`, `rejected_outcomes`, and `dropped_outcomes` every 60s.
 
 ## 1. Setup
 
