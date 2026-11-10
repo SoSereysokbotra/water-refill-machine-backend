@@ -37,7 +37,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     const isBaseError =
       exception instanceof BaseError ||
-      (exception instanceof Error && typeof (exception as Record<string, unknown>).code === 'string');
+      (exception instanceof Error && typeof (exception as unknown as Record<string, unknown>).code === 'string');
 
     if (isBaseError) {
       const err = exception as BaseError;
