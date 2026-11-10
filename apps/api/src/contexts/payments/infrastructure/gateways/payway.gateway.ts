@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import crypto from 'node:crypto';
 import { ConfigService } from '../../../../platform/config/config.service';
 import {
@@ -27,7 +27,7 @@ export class PayWayGatewayAdapter implements PaymentGateway {
   private readonly apiKey: string;
   private readonly callbackUrl: string;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {
     this.baseUrl = this.config.get('PAYWAY_BASE_URL').replace(/\/+$/, '');
     this.merchantId = this.config.get('PAYWAY_MERCHANT_ID');
     this.apiKey = this.config.get('PAYWAY_API_KEY');

@@ -24,11 +24,11 @@ export class PaymentsMqttConsumer implements OnModuleInit {
   private readonly logger = new Logger(PaymentsMqttConsumer.name);
 
   constructor(
-    private readonly mqtt: MqttService,
-    private readonly limiter: RateLimiterService,
-    private readonly createPaymentHandler: CreatePaymentHandler,
-    private readonly cancelPaymentHandler: CancelPaymentHandler,
-    private readonly recordDispenseHandler: RecordDispenseHandler,
+    @Inject(MqttService) private readonly mqtt: MqttService,
+    @Inject(RateLimiterService) private readonly limiter: RateLimiterService,
+    @Inject(CreatePaymentHandler) private readonly createPaymentHandler: CreatePaymentHandler,
+    @Inject(CancelPaymentHandler) private readonly cancelPaymentHandler: CancelPaymentHandler,
+    @Inject(RecordDispenseHandler) private readonly recordDispenseHandler: RecordDispenseHandler,
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
   ) {}
 

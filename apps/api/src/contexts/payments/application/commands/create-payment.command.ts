@@ -30,11 +30,11 @@ export class CreatePaymentHandler {
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
     @Inject('PaymentGateway') private readonly gateway: PaymentGateway,
     @Inject('MachinePort') private readonly machines: MachinePort,
-    private readonly uow: UnitOfWork,
-    private readonly outbox: OutboxService,
-    private readonly clock: Clock,
-    private readonly tranIds: TranIdGenerator,
-    private readonly config: ConfigService,
+    @Inject(UnitOfWork) private readonly uow: UnitOfWork,
+    @Inject(OutboxService) private readonly outbox: OutboxService,
+    @Inject('Clock') private readonly clock: Clock,
+    @Inject(TranIdGenerator) private readonly tranIds: TranIdGenerator,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {
     this.ttlMinutes = this.config.get('PAYMENT_TTL_MINUTES');
   }

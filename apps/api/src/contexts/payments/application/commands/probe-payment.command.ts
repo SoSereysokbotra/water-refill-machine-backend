@@ -23,9 +23,9 @@ export class ProbePaymentHandler {
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
     @Inject('PaymentGateway') private readonly gateway: PaymentGateway,
-    private readonly confirmHandler: ConfirmPaymentHandler,
-    private readonly uow: UnitOfWork,
-    private readonly clock: Clock,
+    @Inject(ConfirmPaymentHandler) private readonly confirmHandler: ConfirmPaymentHandler,
+    @Inject(UnitOfWork) private readonly uow: UnitOfWork,
+    @Inject('Clock') private readonly clock: Clock,
   ) {}
 
   async execute(cmd: ProbePaymentCommand): Promise<void> {

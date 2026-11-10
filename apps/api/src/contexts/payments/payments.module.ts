@@ -1,7 +1,7 @@
-import { Module, OnModuleInit } from '@nestjs/common';
+import { Module, OnModuleInit, Inject } from '@nestjs/common';
 import { ConfigService } from '../../platform/config/config.service';
 import { SweepsScheduler } from '../../platform/sweeps/sweeps.scheduler';
-import { TranIdGenerator } from '../../shared-kernel';
+import { SystemClock, TranIdGenerator } from '../../shared-kernel';
 import {
   CancelPaymentHandler,
   ConfirmPaymentHandler,
@@ -30,6 +30,11 @@ import {
   controllers: [PaymentsController],
   providers: [
     TranIdGenerator,
+    {
+      provide: 'Clock',
+      useClass: SystemClock,
+    },
+    SystemClock,
     {
       provide: 'PaymentRepository',
       useClass: PrismaPaymentRepository,
@@ -67,6 +72,7 @@ import {
   exports: [
     'PaymentRepository',
     'PaymentGateway',
+    'Clock',
     CreatePaymentHandler,
     ConfirmPaymentHandler,
     ExpirePaymentHandler,
@@ -80,9 +86,9 @@ import {
 })
 export class PaymentsModule implements OnModuleInit {
   constructor(
-    private readonly sweepsScheduler: SweepsScheduler,
-    private readonly paymentsSweep: PaymentsSweep,
-    private readonly reconcileSweep: ReconcileSweep,
+    @Inject(SweepsScheduler) private readonly sweepsScheduler: SweepsScheduler,
+    @Inject(PaymentsSweep) private readonly paymentsSweep: PaymentsSweep,
+    @Inject(ReconcileSweep) private readonly reconcileSweep: ReconcileSweep,
   ) {}
 
   onModuleInit(): void {

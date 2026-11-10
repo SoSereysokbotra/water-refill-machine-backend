@@ -16,11 +16,11 @@ export class PaymentsSweep extends BaseSweep<Payment> {
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
     @Inject('PaymentGateway') private readonly gateway: PaymentGateway,
-    private readonly confirmHandler: ConfirmPaymentHandler,
-    private readonly expireHandler: ExpirePaymentHandler,
-    private readonly failHandler: FailPaymentHandler,
-    private readonly clock: Clock,
-    private readonly config: ConfigService,
+    @Inject(ConfirmPaymentHandler) private readonly confirmHandler: ConfirmPaymentHandler,
+    @Inject(ExpirePaymentHandler) private readonly expireHandler: ExpirePaymentHandler,
+    @Inject(FailPaymentHandler) private readonly failHandler: FailPaymentHandler,
+    @Inject('Clock') private readonly clock: Clock,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {
     // Runs every 3 seconds per Plan C5 / B4.8
     super('payments', 3000);

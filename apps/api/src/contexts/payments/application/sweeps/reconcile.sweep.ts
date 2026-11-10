@@ -9,8 +9,8 @@ import { ProbePaymentCommand, ProbePaymentHandler } from '../commands/probe-paym
 export class ReconcileSweep extends BaseSweep<Payment> {
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
-    private readonly probeHandler: ProbePaymentHandler,
-    private readonly clock: Clock,
+    @Inject(ProbePaymentHandler) private readonly probeHandler: ProbePaymentHandler,
+    @Inject('Clock') private readonly clock: Clock,
   ) {
     // Runs every 5 minutes per Plan C5
     super('reconcile', 5 * 60 * 1000);

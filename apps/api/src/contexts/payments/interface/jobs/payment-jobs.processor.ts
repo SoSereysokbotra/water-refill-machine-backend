@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { QueueService } from '../../../../platform/queues/queue.service';
 import { ConfirmPaymentCommand, ConfirmPaymentHandler } from '../../application';
 
@@ -7,8 +7,8 @@ export class PaymentJobsProcessor implements OnModuleInit {
   private readonly logger = new Logger(PaymentJobsProcessor.name);
 
   constructor(
-    private readonly queues: QueueService,
-    private readonly confirmHandler: ConfirmPaymentHandler,
+    @Inject(QueueService) private readonly queues: QueueService,
+    @Inject(ConfirmPaymentHandler) private readonly confirmHandler: ConfirmPaymentHandler,
   ) {}
 
   onModuleInit(): void {

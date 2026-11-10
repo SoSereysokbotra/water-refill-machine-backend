@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { DomainError, NotFoundError } from '../../../../shared-kernel';
 import { PrismaService } from '../../../../platform/database/prisma.service';
@@ -7,7 +7,7 @@ import { Currency } from '../../domain/payment.types';
 
 @Injectable()
 export class PrismaMachineAdapter implements MachinePort {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   private getClient(tx?: unknown): Prisma.TransactionClient | PrismaService {
     return (tx as Prisma.TransactionClient) ?? this.prisma;

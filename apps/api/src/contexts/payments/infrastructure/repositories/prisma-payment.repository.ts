@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ConflictError, NotFoundError, Clock } from '../../../../shared-kernel';
 import { PrismaService } from '../../../../platform/database/prisma.service';
@@ -9,8 +9,8 @@ import { PaymentStatus, Currency } from '../../domain/payment.types';
 @Injectable()
 export class PrismaPaymentRepository implements PaymentRepository {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly clock: Clock,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject('Clock') private readonly clock: Clock,
   ) {}
 
   private getClient(tx?: unknown): Prisma.TransactionClient | PrismaService {

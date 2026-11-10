@@ -19,10 +19,10 @@ export class ConfirmPaymentHandler {
 
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
-    private readonly uow: UnitOfWork,
-    private readonly outbox: OutboxService,
-    private readonly clock: Clock,
-    private readonly config: ConfigService,
+    @Inject(UnitOfWork) private readonly uow: UnitOfWork,
+    @Inject(OutboxService) private readonly outbox: OutboxService,
+    @Inject('Clock') private readonly clock: Clock,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {
     this.graceSeconds = this.config.get('PAYMENT_GRACE_SECONDS');
   }

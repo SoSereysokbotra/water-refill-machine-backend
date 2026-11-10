@@ -15,9 +15,9 @@ export class FailPaymentCommand {
 export class FailPaymentHandler {
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
-    private readonly uow: UnitOfWork,
-    private readonly outbox: OutboxService,
-    private readonly clock: Clock,
+    @Inject(UnitOfWork) private readonly uow: UnitOfWork,
+    @Inject(OutboxService) private readonly outbox: OutboxService,
+    @Inject('Clock') private readonly clock: Clock,
   ) {}
 
   async execute(cmd: FailPaymentCommand): Promise<void> {

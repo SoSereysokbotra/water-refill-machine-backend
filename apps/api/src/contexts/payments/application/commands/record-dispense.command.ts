@@ -21,11 +21,11 @@ export class RecordDispenseHandler {
 
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
-    private readonly prisma: PrismaService,
-    private readonly uow: UnitOfWork,
-    private readonly outbox: OutboxService,
-    private readonly clock: Clock,
-    private readonly config: ConfigService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(UnitOfWork) private readonly uow: UnitOfWork,
+    @Inject(OutboxService) private readonly outbox: OutboxService,
+    @Inject('Clock') private readonly clock: Clock,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {
     this.maxClockSkewMs = this.config.get('CLOCK_SKEW_MAX_SECONDS') * 1000;
   }

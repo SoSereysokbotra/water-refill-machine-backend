@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DomainEvent } from '../../../../shared-kernel/domain-event';
 import { OutboxHandlerRegistry } from '../../../../platform/outbox/outbox-handler.registry';
 import { MqttService } from '../../../../platform/mqtt/mqtt.service';
@@ -16,8 +16,8 @@ export class PaymentOutboxHandlers implements OnModuleInit {
   private readonly logger = new Logger(PaymentOutboxHandlers.name);
 
   constructor(
-    private readonly registry: OutboxHandlerRegistry,
-    private readonly mqtt: MqttService,
+    @Inject(OutboxHandlerRegistry) private readonly registry: OutboxHandlerRegistry,
+    @Inject(MqttService) private readonly mqtt: MqttService,
   ) {}
 
   onModuleInit(): void {

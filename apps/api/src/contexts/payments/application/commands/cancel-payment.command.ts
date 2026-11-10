@@ -19,9 +19,9 @@ export class CancelPaymentHandler {
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
     @Inject('PaymentGateway') private readonly gateway: PaymentGateway,
-    private readonly uow: UnitOfWork,
-    private readonly outbox: OutboxService,
-    private readonly clock: Clock,
+    @Inject(UnitOfWork) private readonly uow: UnitOfWork,
+    @Inject(OutboxService) private readonly outbox: OutboxService,
+    @Inject('Clock') private readonly clock: Clock,
   ) {}
 
   async execute(cmd: CancelPaymentCommand): Promise<void> {

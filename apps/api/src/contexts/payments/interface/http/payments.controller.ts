@@ -7,8 +7,8 @@ export class PaymentsController {
   private readonly logger = new Logger(PaymentsController.name);
 
   constructor(
-    private readonly queues: QueueService,
-    private readonly confirmHandler: ConfirmPaymentHandler,
+    @Inject(QueueService) private readonly queues: QueueService,
+    @Inject(ConfirmPaymentHandler) private readonly confirmHandler: ConfirmPaymentHandler,
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
   ) {}
 
