@@ -1,11 +1,12 @@
-// ESP32 gateway for the Water Refill Machine.
+// ESP32 gateway for the Water Refill Machine (v0.3.0).
 //
 //   STM32 (machine control)  <--UART2-->  ESP32 (this)  <--MQTT/TLS-->  EMQX Cloud  <-->  Backend
 //
 // UART protocol (one text line per message, '\n' terminated):
-//   STM32 -> ESP32 : REQ_PAY,<volume_ml> | DONE,<tran_id>,<flow_ml>,<weight_g> | ERR,<code> | PING | PONG
+//   STM32 -> ESP32 : REQ_PAY,<volume_ml> | DONE,<tran_id>,<flow_ml>,<weight_g> | ERR,<code> | PING | PONG | CANCEL
 //   ESP32 -> STM32 : QR,<tran_id>,<amount>,<currency>,<expires_s>,<qr_string>
-//                    PAID,<tran_id> | EXPIRED,<tran_id> | FAILED,<tran_id> | NET,OK | NET,DOWN | PING | PONG
+//                    PAID,<tran_id> | EXPIRED,<tran_id> | FAILED,<tran_id> | CANCELLED,<tran_id>
+//                    ACK,<tran_id> | NET,OK | NET,DOWN | PING | PONG
 //
 // TEST MODE (USB serial monitor): a numbered menu plus the same commands the STM32 sends,
 // so the whole payment flow can be tested without the STM32 board.
@@ -19,7 +20,7 @@
 #include "secrets.h"
 #include "ca_cert.h"
 
-#define FW_VERSION          "0.2.0"
+#define FW_VERSION          "0.3.0"
 #define STM32_RX_PIN        16      // ESP32 RX2  <- STM32 TX
 #define STM32_TX_PIN        17      // ESP32 TX2  -> STM32 RX
 #define STM32_BAUD          115200
@@ -39,11 +40,22 @@ unsigned long lastHeartbeat = 0, lastPing = 0, lastPong = 0, lastMqttTry = 0;
 unsigned long mqttBackoff = 2000;
 bool stm32Lost = false;
 bool qrInvert = false;             // false = dark terminal theme, true = light theme
-String currentTran, lastQrString, lastStatus;
+String currentTran, currentRequestId, lastQrString, lastStatus;
 int lastVolume = 0;
+
+// Retry policy for pay/request (Plan B4.7)
+bool awaitingQr = false;
+unsigned long lastReqTime = 0;
+int reqRetries = 0;
 
 // ---------- helpers ----------
 String topic(const char *suffix) { return String("wrm/") + MACHINE_ID + "/" + suffix; }
+
+String generateRequestId() {
+  char buf[17];
+  snprintf(buf, sizeof(buf), "%08x%08x", (uint32_t)esp_random(), (uint32_t)esp_random());
+  return String(buf);
+}
 
 // Reads '\n'-terminated lines; drops terminal junk (arrow-key escape codes, \r, control chars)
 // and applies Backspace/DEL, so typed commands always arrive clean.
@@ -99,54 +111,55 @@ void printMenu() {
   Serial.println("|  1  Pay for 500 mL                      |");
   Serial.println("|  2  Pay for 750 mL                      |");
   Serial.println("|  3  Pay for 1000 mL                     |");
-  Serial.println("|  q  Show the last QR again              |");
-  Serial.println("|  d  Report dispense done (after PAID)   |");
-  Serial.println("|  i  Invert QR colours (light/dark theme)|");
-  Serial.println("|  s  Status                              |");
-  Serial.println("|  h  Show this menu                      |");
+  Serial.println("|  C  Cancel current payment              |");
+  Serial.println("|  D  Report dispense done (after PAID)   |");
+  Serial.println("|  S  Show network & system status        |");
+  Serial.println("|  Q  Reprint last QR                     |");
+  Serial.println("|  I  Invert QR colours                   |");
   Serial.println("+-----------------------------------------+");
-  Serial.println("Type a key and press Enter. Full STM32 commands also work (REQ_PAY,500).");
+  Serial.println("Or type raw STM32 commands: REQ_PAY,500 / DONE,<tran>,<flow>,<weight> / ERR,<code>");
+  Serial.println();
 }
 
-// Compact QR for the serial monitor: each character = 1 column x 2 rows of modules,
-// using half blocks (top half, bottom half, full block). About 61 x 31 characters for a KHQR.
+void printBanner(const String &title, const String &body) {
+  int w = max(title.length(), body.length()) + 4;
+  w = max(w, 36);
+  String bar = ""; for (int i = 0; i < w; i++) bar += "-";
+  Serial.println("\n+" + bar + "+");
+  Serial.printf("|  %-*s|\n", w - 2, title.c_str());
+  if (body.length()) {
+    Serial.printf("|  %-*s|\n", w - 2, body.c_str());
+  }
+  Serial.println("+" + bar + "+\n");
+}
+
+// Draws the QR to USB Serial using Unicode half-blocks (two module rows per text row)
 void printQr(const String &text) {
-#if PRINT_QR_TO_USB
-  static uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(15)];
-  static uint8_t tmp[qrcodegen_BUFFER_LEN_FOR_VERSION(15)];
-  if (!qrcodegen_encodeText(text.c_str(), tmp, qr, qrcodegen_Ecc_LOW, 1, 15, qrcodegen_Mask_AUTO, true)) {
-    Serial.println("[qr] text too long to encode");
-    return;
-  }
-  const int size = qrcodegen_getSize(qr), quiet = 2;
+  if (!PRINT_QR_TO_USB || text.length() == 0) return;
+  uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(10)];
+  uint8_t temp[qrcodegen_BUFFER_LEN_FOR_VERSION(10)];
+  bool ok = qrcodegen_encodeText(text.c_str(), temp, qr, qrcodegen_Ecc_LOW, 1, 10, qrcodegen_Mask_AUTO, true);
+  if (!ok) { Serial.println("  (QR too big for display buffer)"); return; }
+
+  int size = qrcodegen_getSize(qr);
   Serial.println();
-  for (int y = -quiet; y < size + quiet; y += 2) {
-    String row;
-    row.reserve((size + 2 * quiet) * 3 + 2);
-    for (int x = -quiet; x < size + quiet; x++) {
-      // "ink" = what the terminal draws in its text colour.
-      // Dark theme: text is light -> draw the LIGHT modules. Light theme: draw the DARK modules.
-      bool top = qrcodegen_getModule(qr, x, y) == qrInvert;
-      bool bot = qrcodegen_getModule(qr, x, y + 1) == qrInvert;
-      if (top && bot) row += "\xE2\x96\x88";       // full block
-      else if (top) row += "\xE2\x96\x80";         // upper half
-      else if (bot) row += "\xE2\x96\x84";         // lower half
-      else row += ' ';
+  for (int y = -2; y < size + 2; y += 2) {
+    Serial.print("  ");
+    for (int x = -2; x < size + 2; x++) {
+      bool top = (x >= 0 && x < size && y >= 0 && y < size) ? qrcodegen_getModule(qr, x, y) : false;
+      bool bot = (x >= 0 && x < size && (y + 1) >= 0 && (y + 1) < size) ? qrcodegen_getModule(qr, x, y + 1) : false;
+      if (qrInvert) { top = !top; bot = !bot; }
+      if (top && bot) Serial.print("\xE2\x96\x88");
+      else if (top && !bot) Serial.print("\xE2\x96\x80");
+      else if (!top && bot) Serial.print("\xE2\x96\x84");
+      else Serial.print(' ');
     }
-    Serial.println(row);
+    Serial.println();
   }
-  Serial.println("Scan with the ABA app. Not scanning? type 'i' (invert) or open the backend /dev page.");
-#endif
-}
-
-void printBanner(const char *title, const String &detail) {
   Serial.println();
-  Serial.println("==========================================");
-  Serial.printf("  %s  %s\n", title, detail.c_str());
-  Serial.println("==========================================");
 }
 
-// ---------- MQTT -> STM32 ----------
+// ---------- MQTT callbacks ----------
 void onMqttMessage(char *t, byte *payload, unsigned int len) {
   String tp(t);
   JsonDocument doc;
@@ -156,29 +169,59 @@ void onMqttMessage(char *t, byte *payload, unsigned int len) {
   }
 
   if (tp.endsWith("/pay/qr")) {
+    String reqId = doc["request_id"].as<String>();
+    if (reqId.length() && currentRequestId.length() && reqId != currentRequestId) {
+      Serial.printf("  [mqtt] discarding stale/foreign QR (got %s, expected %s)\n", reqId.c_str(), currentRequestId.c_str());
+      return;
+    }
+
+    awaitingQr = false;
     currentTran = doc["tran_id"].as<String>();
     lastQrString = doc["qr_string"].as<String>();
     lastStatus = "pending";
+
+    int remainingSec = 180;
+    if (!doc["expires_in_s"].isNull()) {
+      remainingSec = doc["expires_in_s"].as<int>();
+    } else if (!doc["expires_at"].isNull()) {
+      // remaining seconds default
+      remainingSec = 180;
+    }
+
     String amount = doc["amount"].as<String>() + " " + doc["currency"].as<String>();
     toStm32("QR," + currentTran + "," + doc["amount"].as<String>() + "," + doc["currency"].as<String>() + "," +
-            doc["expires_in_s"].as<String>() + "," + lastQrString);
+            String(remainingSec) + "," + lastQrString);
     printQr(lastQrString);
     printBanner("SCAN TO PAY", amount + "  |  tran " + currentTran + "  |  expires in " +
-                                   doc["expires_in_s"].as<String>() + " s");
+                                   String(remainingSec) + " s");
   } else if (tp.endsWith("/pay/status")) {
     String status = doc["status"].as<String>();
     String tran = doc["tran_id"].isNull() ? String("0") : doc["tran_id"].as<String>();
-    if (tran == currentTran) lastStatus = status;
+    String reqId = doc["request_id"].isNull() ? "" : doc["request_id"].as<String>();
+
+    if (tran == currentTran || (reqId.length() && reqId == currentRequestId)) {
+      awaitingQr = false;
+      lastStatus = status;
+    }
+
     if (status == "paid") {
       toStm32("PAID," + tran);
       printBanner("PAID", "tran " + tran + "  ->  type 'd' to report dispense done");
     } else if (status == "expired") {
       toStm32("EXPIRED," + tran);
       printBanner("EXPIRED", "tran " + tran + "  ->  type 1/2/3 for a new payment");
+    } else if (status == "cancelled") {
+      toStm32("CANCELLED," + tran);
+      printBanner("CANCELLED", "tran " + tran);
     } else if (status == "failed") {
       toStm32("FAILED," + tran);
-      printBanner("FAILED", doc["error"].isNull() ? "tran " + tran : String(doc["error"].as<const char *>()));
+      printBanner("FAILED", doc["reason"].isNull() ? (doc["error"].isNull() ? "tran " + tran : String(doc["error"].as<const char *>())) : String(doc["reason"].as<const char *>()));
     }
+  } else if (tp.endsWith("/transaction/ack")) {
+    String tran = doc["tran_id"].as<String>();
+    String status = doc["status"].as<String>();
+    Serial.printf("  [mqtt] transaction/ack for %s: %s\n", tran.c_str(), status.c_str());
+    toStm32("ACK," + tran);
   }
 }
 
@@ -186,10 +229,35 @@ void onMqttMessage(char *t, byte *payload, unsigned int len) {
 void requestPayment(int volumeMl) {
   if (!mqtt.connected()) { toStm32("NET,DOWN"); Serial.println("  Not connected to MQTT yet - wait for NET,OK"); return; }
   lastVolume = volumeMl;
+  currentRequestId = generateRequestId();
+  awaitingQr = true;
+  lastReqTime = millis();
+  reqRetries = 0;
+  lastStatus = "requesting";
+
   JsonDocument doc;
+  doc["v"] = 1;
+  doc["request_id"] = currentRequestId;
   doc["volume_ml"] = volumeMl;
   publishJson("pay/request", doc);
-  Serial.println("  Waiting for QR...");
+  Serial.printf("  [req] Waiting for QR (request_id=%s)...\n", currentRequestId.c_str());
+}
+
+void cancelPayment() {
+  if (!mqtt.connected()) return;
+  JsonDocument doc;
+  doc["v"] = 1;
+  if (currentTran.length()) doc["tran_id"] = currentTran;
+  if (currentRequestId.length()) doc["request_id"] = currentRequestId;
+  doc["reason"] = "USER_CANCELLED";
+  publishJson("pay/cancel", doc);
+
+  awaitingQr = false;
+  currentTran = "";
+  currentRequestId = "";
+  lastStatus = "cancelled";
+  toStm32("CANCELLED,OK");
+  Serial.println("  Payment cancelled locally and cancel sent to backend");
 }
 
 void handleLine(String line, bool fromUsb) {
@@ -198,6 +266,7 @@ void handleLine(String line, bool fromUsb) {
     if (line == "1") line = "REQ_PAY,500";
     else if (line == "2") line = "REQ_PAY,750";
     else if (line == "3") line = "REQ_PAY,1000";
+    else if (line == "C" || line == "CANCEL") line = "CANCEL";
     else if (line == "H" || line == "HELP" || line == "?") { printMenu(); return; }
     else if (line == "I") {
       qrInvert = !qrInvert;
@@ -230,19 +299,25 @@ void handleLine(String line, bool fromUsb) {
 
   if (cmd == "REQ_PAY") {
     requestPayment(rest.toInt());
+  } else if (cmd == "CANCEL" || cmd == "REQ_CANCEL") {
+    cancelPayment();
   } else if (cmd == "DONE") {
     int a = rest.indexOf(','), b = rest.indexOf(',', a + 1);
     JsonDocument doc;
+    doc["v"] = 1;
     doc["tran_id"] = rest.substring(0, a);
+    doc["result"] = "ok";
     doc["flow_ml"] = rest.substring(a + 1, b).toInt();
     doc["weight_g"] = rest.substring(b + 1).toInt();
-    doc["status"] = "ok";
+    doc["ts"] = (unsigned long)time(nullptr);
     publishJson("transaction", doc);
     if (fromUsb) lastStatus = "done";
   } else if (cmd == "ERR") {
     JsonDocument doc;
-    doc["code"] = rest;
-    doc["tran_id"] = currentTran;
+    doc["v"] = 1;
+    doc["fault"] = rest;
+    if (currentTran.length()) doc["tran_id"] = currentTran;
+    doc["ts"] = (unsigned long)time(nullptr);
     publishJson("error", doc);
   } else {
     Serial.println("  Unknown command - type h for the menu");
@@ -278,7 +353,6 @@ void ensureMqtt() {
 
   Serial.printf("[mqtt] connecting to %s:%d ...\n", MQTT_HOST, MQTT_PORT);
   String willTopic = topic("online");
-  // cleanSession=false: QoS1 messages (e.g. PAID) sent while we were offline are delivered on reconnect
   bool ok = mqtt.connect(MACHINE_ID, MQTT_USERNAME, MQTT_PASSWORD, willTopic.c_str(), 1, true, "0", false);
   if (!ok) {
     Serial.printf("[mqtt] failed, state=%d (retry in %lus)\n", mqtt.state(), mqttBackoff / 1000);
@@ -290,6 +364,7 @@ void ensureMqtt() {
   mqtt.publish(willTopic.c_str(), "1", true);
   mqtt.subscribe(topic("pay/qr").c_str(), 1);
   mqtt.subscribe(topic("pay/status").c_str(), 1);
+  mqtt.subscribe(topic("transaction/ack").c_str(), 1);
   Serial.println("[mqtt] connected");
   setNet(true);
   static bool menuShown = false;
@@ -325,6 +400,26 @@ void loop() {
   if (usbReader.read(Serial, line)) handleLine(line, true);
 
   unsigned long now = millis();
+
+  // Retry policy for pay/request (B4.7)
+  if (awaitingQr && (now - lastReqTime > 5000)) {
+    if (reqRetries < 3) {
+      reqRetries++;
+      lastReqTime = now;
+      JsonDocument doc;
+      doc["v"] = 1;
+      doc["request_id"] = currentRequestId;
+      doc["volume_ml"] = lastVolume;
+      publishJson("pay/request", doc);
+      Serial.printf("  [req] retry %d/3 for request_id=%s\n", reqRetries, currentRequestId.c_str());
+    } else {
+      awaitingQr = false;
+      lastStatus = "failed";
+      toStm32("FAILED,TIMEOUT");
+      Serial.println("  [req] pay/request timed out after 3 retries");
+    }
+  }
+
   if (now - lastPing > STM32_PING_MS) { lastPing = now; stm32.print("PING\n"); }
   if (!stm32Lost && now - lastPong > STM32_TIMEOUT_MS) {
     stm32Lost = true;
@@ -341,6 +436,6 @@ void loop() {
     doc["stm32"] = stm32Lost ? "lost" : "ok";
     String out;
     serializeJson(doc, out);
-    mqtt.publish(topic("heartbeat").c_str(), out.c_str());   // silent: no log spam while typing
+    mqtt.publish(topic("heartbeat").c_str(), out.c_str());
   }
 }
