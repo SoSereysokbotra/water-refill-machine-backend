@@ -216,7 +216,10 @@ export class PaymentsController {
         body: JSON.stringify({ machineId, volumeMl })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Create payment failed');
+      if (!res.ok) {
+        const msg = data.error?.message || data.message || 'Create payment failed';
+        throw new Error(msg);
+      }
       displayPayment(data);
     } catch (err) {
       alert('Error: ' + err.message);
