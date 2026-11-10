@@ -30,3 +30,24 @@ export interface PaymentGateway {
   checkTransaction(tranId: string): Promise<CheckTransactionResult>;
   closeTransaction(tranId: string): Promise<void>;
 }
+
+export class DuplicateTranIdError extends Error {
+  constructor(message = 'Duplicate transaction ID') {
+    super(message);
+    this.name = 'DuplicateTranIdError';
+  }
+}
+
+export class GatewayUnavailableError extends Error {
+  constructor(message = 'Payment gateway unavailable', public readonly details?: unknown) {
+    super(message);
+    this.name = 'GatewayUnavailableError';
+  }
+}
+
+export class GatewayRejectedError extends Error {
+  constructor(message = 'Payment gateway rejected request', public readonly details?: unknown) {
+    super(message);
+    this.name = 'GatewayRejectedError';
+  }
+}

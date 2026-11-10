@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock } from '../src/shared-kernel';
 import { Payment } from '../src/contexts/payments/domain/payment.aggregate';
 

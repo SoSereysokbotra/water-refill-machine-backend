@@ -50,29 +50,29 @@ export interface RefundReviewOpenedData {
 }
 
 export function paymentCreatedEvent(data: PaymentCreatedData, occurredAt: Date): DomainEvent<PaymentCreatedData> {
-  return createDomainEvent('payments.PaymentCreated', data, occurredAt);
+  return createDomainEvent('payments.PaymentCreated', data, { occurredAt });
 }
 
 export function paymentPaidEvent(data: PaymentPaidData, occurredAt: Date): DomainEvent<PaymentPaidData> {
-  return createDomainEvent('payments.PaymentPaid', data, occurredAt);
+  return createDomainEvent('payments.PaymentPaid', data, { occurredAt });
 }
 
 export function paymentExpiredEvent(data: PaymentExpiredData, occurredAt: Date): DomainEvent<PaymentExpiredData> {
-  return createDomainEvent('payments.PaymentExpired', data, occurredAt);
+  return createDomainEvent('payments.PaymentExpired', data, { occurredAt });
 }
 
 export function paymentCancelledEvent(data: PaymentCancelledData, occurredAt: Date): DomainEvent<PaymentCancelledData> {
-  return createDomainEvent('payments.PaymentCancelled', data, occurredAt);
+  return createDomainEvent('payments.PaymentCancelled', data, { occurredAt });
 }
 
 export function paymentFailedEvent(data: PaymentFailedData, occurredAt: Date): DomainEvent<PaymentFailedData> {
-  return createDomainEvent('payments.PaymentFailed', data, occurredAt);
+  return createDomainEvent('payments.PaymentFailed', data, { occurredAt });
 }
 
 export function latePaymentDetectedEvent(data: LatePaymentDetectedData, occurredAt: Date): DomainEvent<LatePaymentDetectedData> {
-  return createDomainEvent('payments.LatePaymentDetected', data, occurredAt);
+  return createDomainEvent('payments.LatePaymentDetected', data, { occurredAt });
 }
 
 export function refundReviewOpenedEvent(data: RefundReviewOpenedData, occurredAt: Date): DomainEvent<RefundReviewOpenedData> {
-  return createDomainEvent('payments.RefundReviewOpened', data, occurredAt);
+  return createDomainEvent('payments.RefundReviewOpened', data, { occurredAt });
 }

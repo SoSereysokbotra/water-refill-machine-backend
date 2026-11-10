@@ -1,6 +1,4 @@
-/**
- * Payments Context - Infrastructure Layer
- * Contains: Prisma repositories, PayWay adapter, Publishers
- * Allowed imports: domain, application, platform
- */
-export const PAYMENTS_INFRASTRUCTURE = 'payments/infrastructure';
+export * from './repositories/prisma-payment.repository';
+export * from './adapters/prisma-machine.adapter';
+export * from './gateways/payway.gateway';
+export * from './gateways/mock-payway.gateway';
