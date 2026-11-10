@@ -280,18 +280,6 @@ export class Payment extends AggregateRoot {
     if (this._status === 'PAID' || this._status === 'DISPENSE_UNKNOWN') {
       if (result === 'ok') {
         this.transition('DISPENSED', 'dispense ok', clock);
-        this.raise(
-          dispenseCompletedEvent(
-            {
-              tranId: this.tranId,
-              machineId: this.machineId,
-              flowMl,
-              weightG,
-              diffPercent,
-            },
-            clock.now(),
-          ),
-        );
       } else {
         const reasonCode = result === 'partial' ? 'DISPENSE_PARTIAL' : 'DISPENSE_FAILED';
         suggestedRefundMinor = calculateSuggestedRefund({
@@ -305,6 +293,16 @@ export class Payment extends AggregateRoot {
 
         this.transition('REFUND_REVIEW', `dispense ${result} (${fault ?? 'no_fault'})`, clock);
         this.raise(
+          refundReviewOpenedEvent(
+            {
+              tranId: this.tranId,
+              reason: reasonCode,
+              suggestedAmountMinor: suggestedRefundMinor,
+            },
+            clock.now(),
+          ),
+        );
+        this.raise(
           dispenseFailedEvent(
             {
               tranId: this.tranId,
@@ -313,16 +311,6 @@ export class Payment extends AggregateRoot {
               flowMl,
               weightG,
               fault: fault ?? undefined,
-            },
-            clock.now(),
-          ),
-        );
-        this.raise(
-          refundReviewOpenedEvent(
-            {
-              tranId: this.tranId,
-              reason: reasonCode,
-              suggestedAmountMinor: suggestedRefundMinor,
             },
             clock.now(),
           ),

@@ -47,7 +47,8 @@ import {
       provide: 'PaymentGateway',
       useFactory: (config: ConfigService, realGateway: PayWayGatewayAdapter, mockGateway: MockPayWayGateway) => {
         const mode = config.get('PAYWAY_MODE');
-        return mode === 'mock' ? mockGateway : realGateway;
+        const nodeEnv = config.get('NODE_ENV');
+        return nodeEnv === 'test' || mode === 'mock' ? mockGateway : realGateway;
       },
       inject: [ConfigService, PayWayGatewayAdapter, MockPayWayGateway],
     },

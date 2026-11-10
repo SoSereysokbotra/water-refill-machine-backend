@@ -131,7 +131,7 @@ describe('Phase 3 Domain Models & Rules', () => {
     it('claims an open case and prevents conflicting operator claims during active claim period', () => {
       const rc = new RefundCase({
         tranId: 'tran-rc-1',
-        reason: 'late_payment',
+        reason: 'LATE_PAYMENT',
         suggestedAmountMinor: 15,
       });
 
@@ -158,7 +158,7 @@ describe('Phase 3 Domain Models & Rules', () => {
     it('marks refunded and rejects further decision attempts', () => {
       const rc = new RefundCase({
         tranId: 'tran-rc-2',
-        reason: 'dispense_failed',
+        reason: 'DISPENSE_FAILED',
         suggestedAmountMinor: 25,
       });
 
@@ -183,7 +183,7 @@ describe('Phase 3 Domain Models & Rules', () => {
     it('rejects and can be reopened by administrator', () => {
       const rc = new RefundCase({
         tranId: 'tran-rc-3',
-        reason: 'dispense_partial',
+        reason: 'DISPENSE_PARTIAL',
         suggestedAmountMinor: 10,
       });
 
@@ -228,8 +228,7 @@ describe('Phase 3 Domain Models & Rules', () => {
       expect(res.isLate).toBe(false);
       expect(p.status).toBe('DISPENSED');
 
-      const events = p.pullEvents();
-      expect(events.map((e) => e.type)).toContain('dispensing.DispenseCompleted');
+      expect(p.pullEvents()).toHaveLength(0);
     });
 
     it('transitions PAID -> REFUND_REVIEW on partial outcome with suggested refund', () => {

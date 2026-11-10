@@ -70,4 +70,8 @@ export class MockPayWayGateway implements PaymentGateway {
   async closeTransaction(_tranId: string): Promise<void> {
     // Mock close
   }
+
+  async refund(_tranId: string, _amount: number): Promise<void> {
+    // Mock refund
+  }
 }

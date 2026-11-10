@@ -2,11 +2,10 @@ import { Clock, ConflictError, DomainError } from '../../../shared-kernel';
 
 export type RefundStatus = 'open' | 'claimed' | 'refunded' | 'rejected' | 'auto_failed';
 export type RefundReason =
-  | 'late_payment'
-  | 'dispense_failed'
-  | 'dispense_partial'
-  | 'dispense_unknown'
-  | 'manual_request';
+  | 'LATE_PAYMENT'
+  | 'DISPENSE_FAILED'
+  | 'DISPENSE_PARTIAL'
+  | 'DISPENSE_UNKNOWN';
 
 export interface RefundCaseProps {
   tranId: string;
@@ -78,7 +77,10 @@ export class RefundCase {
     }
 
     if (this.isClaimActive(now) && this.claimedBy !== actorId) {
-      throw new ConflictError(`Refund case is already claimed by ${this.claimedBy} until ${this.claimedUntil?.toISOString()}`);
+      throw new ConflictError(
+        'REFUND_ALREADY_CLAIMED',
+        `Refund case is already claimed by ${this.claimedBy} until ${this.claimedUntil?.toISOString()}`,
+      );
     }
 
     this.status = 'claimed';
@@ -100,7 +102,7 @@ export class RefundCase {
     }
 
     if (this.isClaimActive(now) && this.claimedBy !== params.actorId) {
-      throw new DomainError('REFUND_CLAIM_MISMATCH', `Refund case ${this.tranId} is currently claimed by ${this.claimedBy}`);
+      throw new DomainError('REFUND_INVALID_STATE', `Refund case ${this.tranId} is currently claimed by ${this.claimedBy}`);
     }
 
     this.status = 'refunded';
@@ -120,7 +122,7 @@ export class RefundCase {
     }
 
     if (this.isClaimActive(now) && this.claimedBy !== params.actorId) {
-      throw new DomainError('REFUND_CLAIM_MISMATCH', `Refund case ${this.tranId} is currently claimed by ${this.claimedBy}`);
+      throw new DomainError('REFUND_INVALID_STATE', `Refund case ${this.tranId} is currently claimed by ${this.claimedBy}`);
     }
 
     this.status = 'rejected';
@@ -134,7 +136,7 @@ export class RefundCase {
   reopen(params: { actorId: string; reason: string; clock: Clock }): void {
     const now = params.clock.now();
     if (this.status !== 'rejected') {
-      throw new DomainError('REFUND_CANNOT_REOPEN', `Only rejected refund cases can be reopened (current: ${this.status})`);
+      throw new DomainError('REFUND_INVALID_STATE', `Only rejected refund cases can be reopened (current: ${this.status})`);
     }
 
     this.status = 'open';

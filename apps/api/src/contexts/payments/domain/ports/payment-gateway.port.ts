@@ -29,6 +29,7 @@ export interface PaymentGateway {
   createQr(input: CreateQrInput): Promise<CreateQrResult>;
   checkTransaction(tranId: string): Promise<CheckTransactionResult>;
   closeTransaction(tranId: string): Promise<void>;
+  refund?(tranId: string, amount: number, currency: Currency): Promise<void>;
 }
 
 export class DuplicateTranIdError extends Error {

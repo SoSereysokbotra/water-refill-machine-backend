@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import crypto from 'node:crypto';
 import { ConfigService } from '../../../../platform/config/config.service';
+import { Currency } from '../../domain/payment.types';
 import {
   CheckTransactionResult,
   CreateQrInput,
@@ -203,5 +204,18 @@ export class PayWayGatewayAdapter implements PaymentGateway {
       // Close transaction is best-effort until confirmed by ABA (C10.5)
       this.logger.debug(`closeTransaction for ${tranId} completed with note: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  async refund(tranId: string, amount: number, currency: Currency): Promise<void> {
+    const time = reqTime();
+    const hash = sign(`${time}${this.merchantId}${tranId}${amount}`, this.apiKey);
+    await this.postJson<any>('/api/payment-gateway/v1/payments/refund', {
+      req_time: time,
+      merchant_id: this.merchantId,
+      tran_id: tranId,
+      amount,
+      currency,
+      hash,
+    });
   }
 }
