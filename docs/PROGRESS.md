@@ -12,7 +12,7 @@
 | **Current phase** | **Phase 2: Payments** (automated done, awaiting manual hardware check) |
 | **Next action** | Run cut-over hardware check with ABA simulator and ESP32 (see `readmePhase2.md`), then stop prototype |
 | **Last updated** | 2026-11-10 by Backend developer |
-| **Last commit** | `phase2` |
+| **Last commit** | `f6990d0` (pushed to `origin/phase2`) |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
