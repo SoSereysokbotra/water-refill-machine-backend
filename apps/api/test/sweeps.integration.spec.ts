@@ -20,12 +20,11 @@ describe('SweepsScheduler & FLUSHALL Resilience (Integration)', () => {
   });
 
   it('sweep schedulers are recreated after FLUSHALL on Redis', async () => {
-    let executionCount = 0;
     scheduler.registerSchedule({
       name: 'sweep.test-resilience',
       everyMs: 10000,
       processor: async () => {
-        executionCount++;
+        // test processor
       },
     });
 
