@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Clock, ConflictError } from '../../../../shared-kernel';
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
@@ -16,6 +16,8 @@ export class CancelPaymentCommand {
 
 @Injectable()
 export class CancelPaymentHandler {
+  private readonly logger = new Logger(CancelPaymentHandler.name);
+
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
     @Inject('PaymentGateway') private readonly gateway: PaymentGateway,
@@ -31,6 +33,12 @@ export class CancelPaymentHandler {
     }
 
     if (!payment || payment.status !== 'PENDING') return;
+
+    // A machine may only cancel its own payment (tran_id lookup is global)
+    if (payment.machineId !== cmd.machineId) {
+      this.logger.warn(`pay/cancel from ${cmd.machineId} for ${payment.tranId} of ${payment.machineId} ignored`);
+      return;
+    }
 
     await this.uow.run(
       async (tx) => {
