@@ -46,6 +46,16 @@ export class Dispense {
     return Number(pct.toFixed(2));
   }
 
+  /** Same physical outcome (the device re-sent it). `ts` is ignored: a replay after reboot gets a new one. */
+  sameOutcomeAs(other: { result: string; flowMl: number; weightG: number; fault?: string | null }): boolean {
+    return (
+      this.result === other.result &&
+      this.flowMl === other.flowMl &&
+      this.weightG === other.weightG &&
+      (this.fault ?? null) === (other.fault ?? null)
+    );
+  }
+
   get hasAccuracyMismatch(): boolean {
     return this.diffPercent > 5.0;
   }

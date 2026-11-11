@@ -108,6 +108,7 @@ model Payment {
   abaApv              String?       @map("aba_apv")
   nextAbaCheckAt      DateTime?     @map("next_aba_check_at")
   abaCheckCount       Int           @default(0) @map("aba_check_count")
+  reconcileCount      Int           @default(0) @map("reconcile_count") // probes done after the payment ended (B4.8)
   lastAbaCheckAt      DateTime?     @map("last_aba_check_at")
   closedAt            DateTime?     @map("closed_at")
   refundedAmountMinor Int?          @map("refunded_amount_minor")

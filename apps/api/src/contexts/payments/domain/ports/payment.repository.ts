@@ -27,4 +27,6 @@ export interface PaymentRepository {
 
   // Fleet guards
   getMachinePendingOutcomes(machineId: string, tx?: unknown): Promise<number>;
+  /** pending_outcomes and last_seen_at from the machine's latest heartbeat (Fleet). */
+  getMachinePresence(machineId: string, tx?: unknown): Promise<{ pendingOutcomes: number; lastSeenAt: Date | null }>;
 }

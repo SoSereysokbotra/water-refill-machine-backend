@@ -39,4 +39,6 @@ export * from './health/health.module';
 
 export * from './telemetry/telemetry.init';
 
+export * from './security/access.guards';
+
 export * from './platform.module';

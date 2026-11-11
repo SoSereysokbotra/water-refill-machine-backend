@@ -26,6 +26,7 @@ export interface PaymentProps {
   abaApv?: string | null;
   nextAbaCheckAt?: Date | null;
   abaCheckCount?: number;
+  reconcileCount?: number;
   lastAbaCheckAt?: Date | null;
   closedAt?: Date | null;
   refundedAmountMinor?: number | null;

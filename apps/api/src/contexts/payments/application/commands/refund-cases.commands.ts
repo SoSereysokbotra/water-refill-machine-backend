@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { Clock, ConflictError, DomainError, NotFoundError } from '../../../../shared-kernel';
+import { Clock, ConflictError, DomainError, NotFoundError, ValidationError } from '../../../../shared-kernel';
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
 import { PaymentRepository } from '../../domain/ports/payment.repository';
@@ -100,6 +100,13 @@ export class MarkRefundedHandler {
         const rc = await this.repo.getRefundCase(cmd.tranId, tx);
         if (!rc) {
           throw new NotFoundError('REFUND_NOT_FOUND' as any, `Refund case ${cmd.tranId} not found`);
+        }
+
+        // A refund is a positive amount in minor units, never more than the customer paid
+        if (!Number.isInteger(cmd.amountMinor) || cmd.amountMinor < 1 || cmd.amountMinor > payment.amountMinor) {
+          throw new ValidationError(
+            `amountMinor must be an integer between 1 and ${payment.amountMinor} (${payment.currency} minor units)`,
+          );
         }
 
         // Plan §C1 Guard: Block refund while machine reports pending_outcomes > 0

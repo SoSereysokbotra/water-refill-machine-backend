@@ -1,1 +1,1 @@
-export const FLEET_INTERFACE = 'fleet/interface';
+export * from './fleet.mqtt-consumer';

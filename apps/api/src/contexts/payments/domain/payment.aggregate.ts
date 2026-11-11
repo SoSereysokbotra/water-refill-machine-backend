@@ -18,6 +18,18 @@ import {
 import { Currency, PaymentProps, PaymentStatus } from './payment.types';
 import { calculateSuggestedRefund } from './refund-policy';
 
+/**
+ * Plan B4.8: after a payment ends unpaid (EXPIRED / CANCELLED / FAILED) ABA is probed at
+ * +5 min, +1 h, +1 d, +3 d and +6 d (inside ABA's 7-day check window), then probing stops.
+ */
+export const RECONCILE_PROBE_OFFSETS_MS = [
+  5 * 60 * 1000,
+  60 * 60 * 1000,
+  24 * 60 * 60 * 1000,
+  3 * 24 * 60 * 60 * 1000,
+  6 * 24 * 60 * 60 * 1000,
+] as const;
+
 export interface StateChangeAudit {
   fromStatus: PaymentStatus;
   toStatus: PaymentStatus;
@@ -39,6 +51,7 @@ export class Payment extends AggregateRoot {
   abaApv: string | null;
   nextAbaCheckAt: Date | null;
   abaCheckCount: number;
+  reconcileCount: number;
   lastAbaCheckAt: Date | null;
   closedAt: Date | null;
   refundedAmountMinor: number | null;
@@ -63,6 +76,7 @@ export class Payment extends AggregateRoot {
     this.abaApv = props.abaApv ?? null;
     this.nextAbaCheckAt = props.nextAbaCheckAt ?? null;
     this.abaCheckCount = props.abaCheckCount ?? 0;
+    this.reconcileCount = props.reconcileCount ?? 0;
     this.lastAbaCheckAt = props.lastAbaCheckAt ?? null;
     this.closedAt = props.closedAt ?? null;
     this.refundedAmountMinor = props.refundedAmountMinor ?? null;
@@ -152,6 +166,7 @@ export class Payment extends AggregateRoot {
       case 'FAILED': {
         // Late payment detected: never dispense water, customer may have departed
         this.transition('REFUND_REVIEW', `late payment (${foundBy})`, clock);
+        this.nextAbaCheckAt = null; // found: reconcile probing ends
         this.raise(
           latePaymentDetectedEvent(
             {
@@ -204,7 +219,7 @@ export class Payment extends AggregateRoot {
   cancel(reason: string, clock: Clock): void {
     if (this._status !== 'PENDING') return;
     this.transition('CANCELLED', reason, clock);
-    this.nextAbaCheckAt = null;
+    this.startReconcile(clock); // C1: reconcile schedule starts (also for SUPERSEDED)
     this.raise(
       paymentCancelledEvent(
         {
@@ -220,7 +235,7 @@ export class Payment extends AggregateRoot {
   expire(clock: Clock): void {
     if (this._status !== 'PENDING') return;
     this.transition('EXPIRED', 'ttl + grace expired', clock);
-    this.nextAbaCheckAt = null;
+    this.startReconcile(clock); // C1: reconcile schedule starts
     this.raise(
       paymentExpiredEvent(
         {
@@ -236,7 +251,7 @@ export class Payment extends AggregateRoot {
   fail(reason: string, clock: Clock): void {
     if (this._status !== 'PENDING') return;
     this.transition('FAILED', reason, clock);
-    this.nextAbaCheckAt = null;
+    this.startReconcile(clock); // C1: reconcile schedule starts
     this.raise(
       paymentFailedEvent(
         {
@@ -261,16 +276,7 @@ export class Payment extends AggregateRoot {
 
     // If already finalized (DISPENSED, REFUNDED, REFUND_REJECTED) -> late outcome per C1
     if (this._status === 'DISPENSED' || this._status === 'REFUNDED' || this._status === 'REFUND_REJECTED') {
-      this.raise(
-        reconciliationNeededEvent(
-          {
-            tranId: this.tranId,
-            currentStatus: this._status,
-            lateOutcome: { result, flowMl, weightG, fault },
-          },
-          clock.now(),
-        ),
-      );
+      this.recordLateOutcome({ result, flowMl, weightG, fault, clock });
       return { isLate: true, suggestedRefundMinor: 0 };
     }
 
@@ -318,6 +324,29 @@ export class Payment extends AggregateRoot {
     }
 
     return { isLate: false, suggestedRefundMinor };
+  }
+
+  /**
+   * C1: an outcome that arrives after the payment left PAID / DISPENSE_UNKNOWN (or that differs from the
+   * outcome already recorded). The payment is NOT changed; an operator must reconcile it.
+   */
+  recordLateOutcome(params: {
+    result: 'ok' | 'partial' | 'error';
+    flowMl: number;
+    weightG: number;
+    fault?: string | null;
+    clock: Clock;
+  }): void {
+    this.raise(
+      reconciliationNeededEvent(
+        {
+          tranId: this.tranId,
+          currentStatus: this._status,
+          lateOutcome: { result: params.result, flowMl: params.flowMl, weightG: params.weightG, fault: params.fault },
+        },
+        params.clock.now(),
+      ),
+    );
   }
 
   // Backward compatibility alias for Phase 2 tests
@@ -442,6 +471,24 @@ export class Payment extends AggregateRoot {
     this.nextAbaCheckAt = nextCheckAt;
     this.abaCheckCount += 1;
     this.lastAbaCheckAt = clock.now();
+  }
+
+  /** Record one reconcile probe that did not find an approval, and schedule the next one (B4.8). */
+  recordReconcileProbe(clock: Clock): void {
+    const now = clock.now();
+    this.abaCheckCount += 1;
+    this.lastAbaCheckAt = now;
+    this.reconcileCount += 1;
+    const k = this.reconcileCount;
+    this.nextAbaCheckAt =
+      k < RECONCILE_PROBE_OFFSETS_MS.length
+        ? new Date(now.getTime() + RECONCILE_PROBE_OFFSETS_MS[k]! - RECONCILE_PROBE_OFFSETS_MS[k - 1]!)
+        : null;
+  }
+
+  private startReconcile(clock: Clock): void {
+    this.reconcileCount = 0;
+    this.nextAbaCheckAt = new Date(clock.now().getTime() + RECONCILE_PROBE_OFFSETS_MS[0]);
   }
 
   markAbaClosed(clock: Clock): void {

@@ -26,7 +26,10 @@ jobs:
           version: 12.8.1
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @wrm/api db:generate
 
       - name: Lint
         run: pnpm run lint
@@ -37,11 +40,28 @@ jobs:
       - name: Dependency Cruiser (Architecture Boundaries)
         run: pnpm run depcruise
 
-      - name: Unit Tests
+      - name: Unit Tests (no infrastructure)
         run: pnpm run test:unit
 
-      - name: Integration Tests (Testcontainers)
-        run: pnpm run test:integration
+      # Integration / E2E tests need PostgreSQL, Redis and Mosquitto (same as local development)
+      - name: Start local infrastructure
+        run: docker compose -f infra/docker-compose.yml up -d --wait
+
+      - name: Prepare test environment
+        run: cp apps/api/.env.example apps/api/.env
+
+      - name: Apply database migrations
+        run: pnpm --filter @wrm/api db:deploy
+
+      - name: Seed test machines
+        run: pnpm --filter @wrm/api db:seed
+
+      - name: Integration & E2E Tests
+        run: pnpm --filter @wrm/api test:integration
 
       - name: Build
         run: pnpm run build
+
+      - name: Stop local infrastructure
+        if: always()
+        run: docker compose -f infra/docker-compose.yml down -v

@@ -1,5 +1,8 @@
-import { Body, Controller, Get, Header, HttpCode, Inject, Logger, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Inject, Ip, Logger, Param, Post, UseGuards } from '@nestjs/common';
+import { AdminKeyGuard, LocalOnlyGuard } from '../../../../platform/security/access.guards';
 import { QueueService } from '../../../../platform/queues/queue.service';
+import { RateLimiterService } from '../../../../platform/rate-limit/rate-limiter.service';
+import { ConfigService } from '../../../../platform/config/config.service';
 import {
   ConfirmPaymentCommand,
   ConfirmPaymentHandler,
@@ -20,11 +23,20 @@ export class PaymentsController {
     @Inject(CreatePaymentHandler) private readonly createPaymentHandler: CreatePaymentHandler,
     @Inject(RecordDispenseHandler) private readonly recordDispenseHandler: RecordDispenseHandler,
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
+    @Inject(RateLimiterService) private readonly limiter: RateLimiterService,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   @Post(['v1/payway/callback', 'v1/payments/aba/callback'])
   @HttpCode(200)
-  async handleCallback(@Body() body: Record<string, unknown>): Promise<{ status: string }> {
+  async handleCallback(@Body() body: Record<string, unknown>, @Ip() ip: string): Promise<{ status: string }> {
+    // C7: CALLBACK_RATE_LIMIT_PER_MIN per IP (throws RateLimitError -> 429)
+    await this.limiter.consume(`callback:${ip}`, 1, {
+      points: this.config.get('CALLBACK_RATE_LIMIT_PER_MIN'),
+      duration: 60,
+      keyPrefix: 'rl_callback',
+    });
+
     const tranId = typeof body?.tran_id === 'string' ? body.tran_id : null;
     this.logger.log(`Received PayWay callback: tran_id=${tranId}`);
 
@@ -43,6 +55,7 @@ export class PaymentsController {
   }
 
   @Get('v1/payments/:tranId')
+  @UseGuards(AdminKeyGuard)
   async getPayment(@Param('tranId') tranId: string) {
     const payment = await this.repo.get(tranId);
     const amount = payment.currency === 'USD' ? payment.amountMinor / 100 : payment.amountMinor;
@@ -60,6 +73,7 @@ export class PaymentsController {
   }
 
   @Post('v1/payments/dev/create')
+  @UseGuards(LocalOnlyGuard)
   async devCreate(@Body() body: { machineId?: string; volumeMl?: number }) {
     const machineId = body.machineId || 'WRM-001';
     const volumeMl = Number(body.volumeMl || 500);
@@ -82,6 +96,7 @@ export class PaymentsController {
   }
 
   @Post('v1/payments/dev/simulate')
+  @UseGuards(LocalOnlyGuard)
   async simulatePayment(@Body() body: { tranId: string; apv?: string }): Promise<{ status: string }> {
     if (!body.tranId) {
       return { status: 'missing tranId' };
@@ -93,6 +108,7 @@ export class PaymentsController {
   }
 
   @Post('v1/payments/dev/dispense')
+  @UseGuards(LocalOnlyGuard)
   async devDispense(
     @Body()
     body: {
@@ -148,6 +164,7 @@ export class PaymentsController {
   }
 
   @Get(['dev', 'v1/dev'])
+  @UseGuards(LocalOnlyGuard)
   @Header('Content-Type', 'text/html')
   getDevUi(): string {
     return `<!doctype html>

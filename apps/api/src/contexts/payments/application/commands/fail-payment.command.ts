@@ -26,9 +26,7 @@ export class FailPaymentHandler {
         const payment = await this.repo.get(cmd.tranId, tx);
         if (payment.status !== 'PENDING') return;
 
-        payment.fail(cmd.reason, this.clock);
-        // Start reconcile probe schedule at +5 min
-        payment.scheduleNextAbaCheck(new Date(this.clock.now().getTime() + 5 * 60 * 1000), this.clock);
+        payment.fail(cmd.reason, this.clock); // starts the reconcile schedule (B4.8)
 
         await this.repo.save(payment, tx);
         await this.outbox.add(payment.pullEvents(), tx, 'Payment', payment.tranId);

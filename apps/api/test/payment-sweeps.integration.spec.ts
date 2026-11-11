@@ -36,12 +36,14 @@ describe('Payment Sweeps & Reconcile Integration (Phase 2 DoD)', () => {
   }, 30000);
 
   beforeEach(async () => {
+    await prisma.refundCase.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.dispense.deleteMany({ where: { machineId: testMachineId } });
     await prisma.paymentEvent.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.payment.deleteMany({ where: { machineId: testMachineId } });
   });
 
   afterAll(async () => {
+    await prisma.refundCase.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.dispense.deleteMany({ where: { machineId: testMachineId } });
     await prisma.paymentEvent.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.payment.deleteMany({ where: { machineId: testMachineId } });
@@ -128,5 +130,50 @@ describe('Payment Sweeps & Reconcile Integration (Phase 2 DoD)', () => {
     const events = await prisma.paymentEvent.findMany({ where: { tranId } });
     const statuses = events.map((e) => e.toStatus);
     expect(statuses).toContain('REFUND_REVIEW');
+
+    // C1: late payment -> refund case with 100 % suggested refund, so an operator can act on it
+    const refundCase = await prisma.refundCase.findUnique({ where: { tranId } });
+    expect(refundCase?.reason).toBe('LATE_PAYMENT');
+    expect(refundCase?.status).toBe('open');
+    expect(refundCase?.suggestedAmountMinor).toBe(payment?.amountMinor);
+  });
+
+  it('reconcile keeps probing after the first probe even when many ABA polls happened while pending (B4.8)', async () => {
+    const res = await createPaymentHandler.execute(
+      new CreatePaymentCommand(testMachineId, `req-reconcile-sched-${Date.now()}`, 500),
+    );
+    const tranId = res.payment.tranId;
+
+    // Realistic: ~45 polls while the QR was on screen, then expired; first probe due now
+    await prisma.payment.update({
+      where: { tranId },
+      data: { status: 'EXPIRED', abaCheckCount: 45, reconcileCount: 0, nextAbaCheckAt: new Date(Date.now() - 1000) },
+    });
+    mockGateway.setTransactionStatus(tranId, 'not_found');
+
+    await reconcileSweep.execute();
+
+    const payment = await prisma.payment.findUnique({ where: { tranId } });
+    expect(payment?.reconcileCount).toBe(1);
+    // Next probe is at +1 h after the end, i.e. ~55 min after the +5 min probe
+    const delayMs = (payment?.nextAbaCheckAt?.getTime() ?? 0) - Date.now();
+    expect(delayMs).toBeGreaterThan(50 * 60 * 1000);
+    expect(delayMs).toBeLessThanOrEqual(55 * 60 * 1000);
+  });
+
+  it('a superseded payment gets a reconcile schedule (C1: PENDING -> CANCELLED starts reconcile)', async () => {
+    const first = await createPaymentHandler.execute(
+      new CreatePaymentCommand(testMachineId, `req-supersede-a-${Date.now()}`, 500),
+    );
+    await createPaymentHandler.execute(
+      new CreatePaymentCommand(testMachineId, `req-supersede-b-${Date.now()}`, 1000),
+    );
+
+    const superseded = await prisma.payment.findUnique({ where: { tranId: first.payment.tranId } });
+    expect(superseded?.status).toBe('CANCELLED');
+    expect(superseded?.reconcileCount).toBe(0);
+    const delayMs = (superseded?.nextAbaCheckAt?.getTime() ?? 0) - Date.now();
+    expect(delayMs).toBeGreaterThan(4 * 60 * 1000);
+    expect(delayMs).toBeLessThanOrEqual(5 * 60 * 1000);
   });
 });

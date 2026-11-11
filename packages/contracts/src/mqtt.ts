@@ -142,3 +142,70 @@ export const ErrorV1Schema = z.object({
   ts: z.number().optional(),
 });
 export type ErrorV1 = z.infer<typeof ErrorV1Schema>;
+
+// ---------------------------------------------------------------------------
+// heartbeat (machine -> backend, every 60 s) — Plan §C2
+// ---------------------------------------------------------------------------
+export const Stm32StateSchema = z.enum(['IDLE', 'WAIT_QR', 'QR', 'WAIT_BOTTLE', 'DISPENSING', 'ERROR']);
+export const TankLevelSchema = z.enum(['EMPTY', 'LOW', 'MEDIUM', 'FULL']);
+
+export const HeartbeatV1Schema = z.object({
+  v: z.literal(1),
+  fw: z.string(),
+  uptime_s: z.number().int().nonnegative(),
+  rssi: z.number().int(),
+  heap: z.number().int().nonnegative(),
+  stm32: z.object({
+    link: z.enum(['ok', 'lost']),
+    // state/tank/fault come from the last PONG; absent while the UART link is lost
+    state: Stm32StateSchema.optional(),
+    tran_id: z.string().max(20).optional(),
+    tank: TankLevelSchema.optional(),
+    fault: z.string().optional(),
+  }),
+  pending_outcomes: z.number().int().nonnegative(),
+  rejected_outcomes: z.number().int().nonnegative(),
+  dropped_outcomes: z.number().int().nonnegative(),
+  ts: z.number().int().optional(),
+});
+export type HeartbeatV1 = z.infer<typeof HeartbeatV1Schema>;
+
+/** ESP32 firmware v0.4.0 heartbeat (no `v`, `stm32` is "ok" | "lost"). Accepted until Phase 10 like other legacy payloads. */
+export const LegacyHeartbeatSchema = z.object({
+  fw: z.string().optional(),
+  stm32: z.enum(['ok', 'lost']).optional(),
+  pending_outcomes: z.number().int().nonnegative(),
+});
+
+/** What the backend needs from any heartbeat version. */
+export interface NormalizedHeartbeat {
+  fw?: string;
+  stm32Link?: 'ok' | 'lost';
+  stm32State?: z.infer<typeof Stm32StateSchema>;
+  pendingOutcomes: number;
+}
+
+export function parseHeartbeatPayload(
+  raw: unknown,
+): { success: true; data: NormalizedHeartbeat } | { success: false; error: z.ZodError } {
+  const v1 = HeartbeatV1Schema.safeParse(raw);
+  if (v1.success) {
+    return {
+      success: true,
+      data: {
+        fw: v1.data.fw,
+        stm32Link: v1.data.stm32.link,
+        stm32State: v1.data.stm32.state,
+        pendingOutcomes: v1.data.pending_outcomes,
+      },
+    };
+  }
+  const legacy = LegacyHeartbeatSchema.safeParse(raw);
+  if (legacy.success) {
+    return {
+      success: true,
+      data: { fw: legacy.data.fw, stm32Link: legacy.data.stm32, pendingOutcomes: legacy.data.pending_outcomes },
+    };
+  }
+  return { success: false, error: v1.error };
+}

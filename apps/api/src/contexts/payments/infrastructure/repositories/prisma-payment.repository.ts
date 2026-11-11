@@ -33,6 +33,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
     abaApv: string | null;
     nextAbaCheckAt: Date | null;
     abaCheckCount: number;
+    reconcileCount: number;
     lastAbaCheckAt: Date | null;
     closedAt: Date | null;
     refundedAmountMinor: number | null;
@@ -55,6 +56,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
       abaApv: row.abaApv,
       nextAbaCheckAt: row.nextAbaCheckAt,
       abaCheckCount: row.abaCheckCount,
+      reconcileCount: row.reconcileCount,
       lastAbaCheckAt: row.lastAbaCheckAt,
       closedAt: row.closedAt,
       refundedAmountMinor: row.refundedAmountMinor,
@@ -207,6 +209,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
         abaApv: payment.abaApv,
         nextAbaCheckAt: payment.nextAbaCheckAt,
         abaCheckCount: payment.abaCheckCount,
+        reconcileCount: payment.reconcileCount,
         lastAbaCheckAt: payment.lastAbaCheckAt,
         closedAt: payment.closedAt,
         refundedAmountMinor: payment.refundedAmountMinor,
@@ -237,6 +240,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
         abaApv: payment.abaApv,
         nextAbaCheckAt: payment.nextAbaCheckAt,
         abaCheckCount: payment.abaCheckCount,
+        reconcileCount: payment.reconcileCount,
         lastAbaCheckAt: payment.lastAbaCheckAt,
         closedAt: payment.closedAt,
         refundedAmountMinor: payment.refundedAmountMinor,
@@ -330,19 +334,9 @@ export class PrismaPaymentRepository implements PaymentRepository {
 
   async recordDispense(dispense: Dispense, tx?: unknown): Promise<void> {
     const client = this.getClient(tx);
-    await client.dispense.upsert({
-      where: { tranId: dispense.tranId },
-      update: {
-        result: dispense.result,
-        flowMl: dispense.flowMl,
-        weightG: dispense.weightG,
-        diffPercent: new Prisma.Decimal(dispense.diffPercent),
-        fault: dispense.fault,
-        occurredAt: dispense.occurredAt,
-        clockSkew: dispense.clockSkew,
-        late: dispense.late,
-      },
-      create: {
+    // Insert only: the first recorded outcome is the audit record and is never overwritten (C1, D6)
+    await client.dispense.create({
+      data: {
         tranId: dispense.tranId,
         machineId: dispense.machineId,
         result: dispense.result,
@@ -452,6 +446,18 @@ export class PrismaPaymentRepository implements PaymentRepository {
       select: { pendingOutcomes: true },
     });
     return machine?.pendingOutcomes ?? 0;
+  }
+
+  async getMachinePresence(
+    machineId: string,
+    tx?: unknown,
+  ): Promise<{ pendingOutcomes: number; lastSeenAt: Date | null }> {
+    const client = this.getClient(tx);
+    const machine = await client.machine.findUnique({
+      where: { id: machineId },
+      select: { pendingOutcomes: true, lastSeenAt: true },
+    });
+    return { pendingOutcomes: machine?.pendingOutcomes ?? 0, lastSeenAt: machine?.lastSeenAt ?? null };
   }
 
   private async recordEvents(payment: Payment, client: Prisma.TransactionClient | PrismaService): Promise<void> {

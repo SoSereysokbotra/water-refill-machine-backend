@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Clock, ConflictError } from '../../../../shared-kernel';
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
@@ -16,6 +16,8 @@ export class CancelPaymentCommand {
 
 @Injectable()
 export class CancelPaymentHandler {
+  private readonly logger = new Logger(CancelPaymentHandler.name);
+
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
     @Inject('PaymentGateway') private readonly gateway: PaymentGateway,
@@ -32,14 +34,18 @@ export class CancelPaymentHandler {
 
     if (!payment || payment.status !== 'PENDING') return;
 
+    // A machine may only cancel its own payment (tran_id lookup is global)
+    if (payment.machineId !== cmd.machineId) {
+      this.logger.warn(`pay/cancel from ${cmd.machineId} for ${payment.tranId} of ${payment.machineId} ignored`);
+      return;
+    }
+
     await this.uow.run(
       async (tx) => {
         const p = await this.repo.get(payment.tranId, tx);
         if (p.status !== 'PENDING') return;
 
-        p.cancel(cmd.reason, this.clock);
-        // Start reconcile probe schedule at +5 min per B4.8
-        p.scheduleNextAbaCheck(new Date(this.clock.now().getTime() + 5 * 60 * 1000), this.clock);
+        p.cancel(cmd.reason, this.clock); // starts the reconcile schedule (B4.8)
 
         await this.repo.save(p, tx);
         await this.outbox.add(p.pullEvents(), tx, 'Payment', p.tranId);

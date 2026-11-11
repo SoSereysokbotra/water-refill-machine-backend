@@ -9,13 +9,6 @@ export class ProbePaymentCommand {
   constructor(public readonly tranId: string) {}
 }
 
-const RECONCILE_INTERVALS_MS = [
-  60 * 60 * 1000, // +1 hour after 5m
-  24 * 60 * 60 * 1000, // +1 day
-  2 * 24 * 60 * 60 * 1000, // +3 days
-  3 * 24 * 60 * 60 * 1000, // +6 days
-];
-
 @Injectable()
 export class ProbePaymentHandler {
   private readonly logger = new Logger(ProbePaymentHandler.name);
@@ -52,10 +45,11 @@ export class ProbePaymentHandler {
     await this.uow.run(
       async (tx) => {
         const p = await this.repo.get(cmd.tranId, tx);
-        const nextInterval = RECONCILE_INTERVALS_MS[p.abaCheckCount];
-        const nextCheckAt = nextInterval ? new Date(this.clock.now().getTime() + nextInterval) : null;
+        if (!['EXPIRED', 'CANCELLED', 'FAILED'].includes(p.status)) return;
 
-        p.scheduleNextAbaCheck(nextCheckAt, this.clock);
+        // Schedule from reconcile_count, not aba_check_count: the latter already includes
+        // every poll made while the QR was on screen (B4.8).
+        p.recordReconcileProbe(this.clock);
         await this.repo.save(p, tx);
       },
       { retryOn: [ConflictError], attempts: 3 },

@@ -10,9 +10,9 @@
 | | |
 |---|---|
 | **Current phase** | **Phase 3: Dispensing & refund review** (automated done, awaiting manual hardware check) |
-| **Next action** | Run physical hardware check for ESP32 v0.4.0 NVS queue (see `readmePhase3.md`), then prepare for Phase 3.5 |
-| **Last updated** | 2026-11-10 by Backend developer |
-| **Last commit** | `phase3` (pushed to `origin/phase3`) |
+| **Next action** | Merge branch `fix/phase-3-review`, then flash ESP32 **v0.4.1** and run the Phase 2 + 3 manual checks (see handoff note 2026-11-12) before Phase 3.5 |
+| **Last updated** | 2026-11-12 by review (Claude) |
+| **Last commit** | branch `fix/phase-3-review` (not merged yet) |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -93,8 +93,12 @@ Things an AI agent can't do. A person does them, then ticks the box.
 | STM32 developer confirms UART contract C3 + fault codes C8 (questions 9–10 in §F3) | 0 | Hardware developer | ⬜ |
 | Hardware developer reviews 📝 draft docs and fills in TBD (STM32 model, pins, prices) | 0 | Hardware developer | ⬜ |
 | Enable branch protection on `main` | 0 | Backend developer | ⬜ |
-| Real ESP32 cut-over test: 1 -> QR -> ABA simulator pay -> PAID -> DONE -> transaction/ack (see readmePhase2.md) | 2 | Backend / Hardware developer | ⬜ |
-| Real ESP32 NVS queue test: simulate offline dispense, reboot ESP32, verify outcome replay & draining (see readmePhase3.md) | 3 | Backend / Hardware developer | ⬜ |
+| Real ESP32 cut-over test with firmware **v0.4.1**: 1 -> QR -> ABA simulator pay -> PAID -> DONE -> transaction/ack (see readmePhase2.md) | 2 | Backend / Hardware developer | ⬜ |
+| Real ESP32 NVS queue test with firmware **v0.4.1**: simulate offline dispense, reboot ESP32, verify outcome replay & draining (see readmePhase3.md) | 3 | Backend / Hardware developer | ⬜ |
+| Move your real `secrets.h` from the old `esp32-gateway/include/` to `firmware/esp32-gateway/include/` (git-ignored; Phase 0 moved the folder but not this file) | 3 | Backend developer | ⬜ |
+| Existing local dev databases (created with `db push`): run `pnpm --filter @wrm/api exec prisma migrate resolve --applied 20261111000000_init`, then `pnpm --filter @wrm/api db:deploy` | 3 | Each developer | ⬜ |
+| Before the pilot: generate `ADMIN_API_KEY` (≥ 32 chars) for staging/production `.env` and keep it private | 3.5 | Backend developer | ⬜ |
+| Confirm the first GitHub Actions run of the new CI workflow is green (could not be run from the review machine) | 3 | Backend developer | ⬜ |
 
 ---
 
@@ -138,6 +142,47 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-12: Phase 0–3 review fixes (branch `fix/phase-3-review`) by Claude (review)
+
+**Done this session** (one commit per fix)
+- Security: dev routes (`/v1/payments/dev/*`, `/dev`) return 404 outside `APP_ENV=local`; refund + payment-detail routes need `X-Admin-Key` outside local (`ADMIN_API_KEY`); `PAYWAY_MODE=mock` refused in production.
+- Database: real Prisma migrations (`20261111000000_init`, `20261111000100_add_reconcile_count`); the one-open-payment index and tier CHECK moved from `seed.ts` into the migration; `db:deploy` script; migration files pinned to LF.
+- Payments: late payments now open a `LATE_PAYMENT` refund case; reconcile schedule fixed (+5 min, +1 h, +1 d, +3 d, +6 d via new `reconcile_count`) and also runs for superseded payments (+ ABA close); `pay/cancel` only for the machine's own payment.
+- Dispensing: minimal heartbeat/online consumer (`contexts/fleet`) keeps `pending_outcomes` / `last_seen_at`; DISPENSE_UNKNOWN escalates only if the machine was seen online after the payment and has 0 pending outcomes; re-sent identical outcomes are acked ok without change; conflicting / late outcomes keep the original record and raise `ReconciliationNeeded`; dispense records insert-only; duplicate `DispenseFailed` event removed.
+- Refunds: request validation (actorId + reasons required), claim duration from config, only the active claimant may mark refunded, amount 1..paid.
+- Rate limits read from config (pay/request, callback per IP); `refund()` no longer calls the unconfirmed ABA endpoint.
+- Tests/CI: tests load `apps/api/.env` themselves; `test:unit` (no infra) / `test:integration` split; CI starts docker compose, migrates, seeds and runs integration tests.
+- ESP32 v0.4.1: v0.4.0 did not compile (fixed); STM32 lines no longer upper-cased (bug from the first gateway firmware); QR countdown from `expires_at`; stale/foreign/cancelled QRs not shown; pay/status only for the current payment; `PONG` fields parsed; C2 heartbeat; `ERR` without tran_id is not an outcome; `FAILED,0`; B4.7 retry schedule.
+- Docs: plan v3.2 (C7, B5, C6, Phase 4 note); STM32 guide sample checks tran_id.
+
+**Not finished / next steps** (in order)
+1. Review and merge `fix/phase-3-review`.
+2. People: items in section 4 (secrets.h move, DB baseline, flash v0.4.1, manual checks).
+3. Phase 3.5 only after the manual checks pass.
+
+**Changed from the plan** (plan updated to v3.2)
+- Operator endpoints via `X-Admin-Key` until Phase 6 (plan said local-only; the pilot needs refunds on the server).
+- Minimal heartbeat/online consumer pulled from Phase 4 into Phase 3.
+- New column `payments.reconcile_count`.
+
+**Known issues / bugs**
+- Dispensing logic lives in the `payments` context; `contexts/dispensing` is still empty (plan: separate core context). Not moved in this review.
+- `REFUND_MODE=auto` has no executor (the earlier handoff said it existed); refunds are manual only. Fine until ABA confirms a refund API.
+- "Site check needed" for DISPENSE_UNKNOWN is only logged; Telegram alerts come with Monitoring (Phase 5).
+- No circuit breaker (opossum) on the ABA adapter yet (D7).
+- Integration tests still share the developer's local `wrm_dev` database (they clean up machine `WRM-900` rows).
+- Phase 2 DoD "Prototype stopped" is ticked while the Phase 2 manual check is still open.
+
+**How to run / test**
+- `pnpm --filter @wrm/api test:unit` → 10 files / 67 tests (no infrastructure).
+- `docker compose -f infra/docker-compose.yml up -d`, `pnpm --filter @wrm/api db:deploy`, `pnpm --filter @wrm/api db:seed`, `pnpm --filter @wrm/api test:integration` → 14 files / 44 tests.
+- Firmware: `pio run` in `firmware/esp32-gateway` → builds (73 % flash).
+
+**Needs from a person**
+- See section 4.
 
 ---
 

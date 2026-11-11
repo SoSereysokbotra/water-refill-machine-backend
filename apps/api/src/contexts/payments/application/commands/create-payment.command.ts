@@ -84,6 +84,7 @@ export class CreatePaymentHandler {
 
       payment.attachQr(qrString, this.clock);
 
+      let supersededTranIds: string[] = [];
       try {
         await this.uow.run(
           async (tx) => {
@@ -95,6 +96,7 @@ export class CreatePaymentHandler {
             }
 
             const superseded = await this.repo.cancelPendingForMachine(machine.id, 'SUPERSEDED', tx);
+            supersededTranIds = superseded.map((p) => p.tranId);
             await this.repo.insert(payment, tx);
 
             const allEvents = [...superseded.flatMap((p) => p.pullEvents()), ...payment.pullEvents()];
@@ -102,6 +104,11 @@ export class CreatePaymentHandler {
           },
           { retryOn: [ConflictError], attempts: 3 },
         );
+
+        // C1: PENDING -> CANCELLED attempts an ABA close-transaction (best effort, after commit)
+        for (const tranId of supersededTranIds) {
+          await this.gateway.closeTransaction(tranId).catch(() => {});
+        }
 
         return { action: 'created', payment };
       } catch (err: unknown) {
