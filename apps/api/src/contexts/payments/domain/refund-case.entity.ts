@@ -101,8 +101,13 @@ export class RefundCase {
       throw new DomainError('REFUND_ALREADY_DECIDED', `Refund case ${this.tranId} is already refunded`);
     }
 
-    if (this.isClaimActive(now) && this.claimedBy !== params.actorId) {
-      throw new DomainError('REFUND_INVALID_STATE', `Refund case ${this.tranId} is currently claimed by ${this.claimedBy}`);
+    // C7: only the operator holding an active claim may record the refund
+    // (the claim stops two operators paying the same customer twice).
+    if (!this.isClaimActive(now) || this.claimedBy !== params.actorId) {
+      throw new DomainError(
+        'REFUND_INVALID_STATE',
+        `Refund case ${this.tranId} must be claimed by ${params.actorId} (active claim) before marking it refunded`,
+      );
     }
 
     this.status = 'refunded';
