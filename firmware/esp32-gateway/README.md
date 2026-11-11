@@ -1,10 +1,20 @@
-# ESP32 Gateway (WROOM-32) — Firmware v0.4.0
+# ESP32 Gateway (WROOM-32) — Firmware v0.4.1
 
 Connects the machine to the cloud. The ESP32 talks **MQTT (TLS)** to the EMQX Cloud broker and **UART** to the STM32. It never drives the pump or sensors — that is the STM32's job.
 
 ```text
 STM32 (control)  <--UART2 (GPIO16/17)-->  ESP32 (this)  <--MQTT/TLS 8883-->  EMQX Cloud  <-->  Backend
 ```
+
+### v0.4.1 Fixes (Phase 3 review)
+- **STM32 lines keep their case.** v0.4.0 and earlier upper-cased every UART line, so a real `DONE,<tran_id>` (lowercase id) was rejected by the backend. Only the USB test-menu shortcuts are case-insensitive now.
+- **v0.4.0 did not compile** (`min()` type mismatch in the retry backoff) — fixed.
+- **QR countdown** = `expires_at − now` (NTP), so a re-sent QR shows the real time left. Expired QRs, QRs for another request, and QRs that arrive after a local Cancel are not shown (a late one is cancelled with `pay/cancel`).
+- **`pay/status` only for the current payment.** `CANCELLED` for a superseded QR no longer resets the screen. `PAID` is always forwarded; the STM32 accepts it only for the QR it shows.
+- **`PONG,<state>,<tran_id|0>,<tank>,<fault>`** is parsed; the heartbeat uses the C2 format (`v`, `stm32: {link, state, tank, fault}`, `ts`).
+- **`ERR,<fault>` without a `tran_id`** is only a fault report (`error` topic) — it no longer turns the current payment into a failed dispense.
+- **Contract lines:** `FAILED,0` replaces `FAILED,TIMEOUT`; the non-contract `CANCELLED,OK` reply was removed.
+- **`pay/request` retry** per Plan B4.7: wait 8 s, resend after 2 s, 5 s, 10 s, then `FAILED,0`.
 
 ### v0.4.0 Highlights (Phase 3: Dispensing & Outcome Queue)
 - **Non-Volatile Storage (NVS) Outcome Queue**: Outcomes (`DONE`, `PARTIAL`, `ERR` with `tran_id`) are persisted to ESP32 Flash memory before sending `ACK,<tran_id>` to the STM32. Outcomes survive ESP32 reboots and power losses.
@@ -85,16 +95,25 @@ Both are 3.3 V logic — no level shifter. UART: **115200 baud, 8N1**.
 
 One text line per message, ending with `\n`.
 
+Full contract: [Implementation Plan §C3](../../docs/04-Cloud-and-Payment/backend-implementation-plan.md). Summary of what v0.4.1 implements:
+
 | Message | Direction | Meaning |
 |---|---|---|
 | `REQ_PAY,<volume_ml>` | STM32 → ESP32 | Customer chose 500 / 750 / 1000 mL |
-| `QR,<tran_id>,<amount>,<currency>,<expires_s>,<qr_string>` | ESP32 → STM32 | Draw this QR (qr_string ≈ 240 chars, always last) |
-| `PAID,<tran_id>` | ESP32 → STM32 | Paid — dispense **only if tran_id matches** the QR shown |
-| `EXPIRED,<tran_id>` / `FAILED,<tran_id>` | ESP32 → STM32 | Back to welcome screen (`FAILED,0` = request rejected) |
+| `CANCEL` / `CANCEL,<tran_id>` | STM32 → ESP32 | Customer pressed Cancel (no reply line; the STM32 is already idle) |
+| `QR,<tran_id>,<amount>,<currency>,<remaining_s>,<qr_string>` | ESP32 → STM32 | Draw this QR (qr_string ≈ 240 chars, always last; may contain commas) |
+| `PAID,<tran_id>` | ESP32 → STM32 | Paid — repeated every 2 s until answered. Dispense **only if tran_id matches** the QR shown |
+| `PAID,ACK,<tran_id>` / `PAID,REJECT,<tran_id>,<fault>` | STM32 → ESP32 | Payment accepted / refused (refused = outcome `error`) |
+| `EXPIRED,<tran_id>` / `FAILED,<tran_id>` / `CANCELLED,<tran_id>` | ESP32 → STM32 | Back to welcome screen — only for the current QR; check the tran_id |
+| `FAILED,0` | ESP32 → STM32 | Request failed after retries ("Service unavailable") |
 | `DONE,<tran_id>,<flow_ml>,<weight_g>` | STM32 → ESP32 | Dispense finished |
-| `ERR,<code>` | STM32 → ESP32 | Fault (e.g. `TANK_EMPTY`, `NO_FLOW`) |
+| `PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault>` | STM32 → ESP32 | Stopped early |
+| `ERR,<fault>[,<tran_id>]` | STM32 → ESP32 | Fault. With `tran_id` = dispense outcome `error`; without = fault report only |
+| `ACK,<tran_id>` | ESP32 → STM32 | Outcome saved in NVS — the STM32 may forget it |
 | `NET,OK` / `NET,DOWN` | ESP32 → STM32 | Network status (show "Offline" when down) |
-| `PING` / `PONG` | both | Link check — ESP32 sends `PING` every 5 s; STM32 must answer `PONG` |
+| `PING` → `PONG,<state>,<tran_id\|0>,<tank>,<fault>` | both | Link check every 5 s (plain `PONG` also accepted) |
+
+`tran_id`s are lowercase — never change their case on either side.
 
 ## 5. MQTT topics used
 

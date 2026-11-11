@@ -1,14 +1,23 @@
-// ESP32 gateway for the Water Refill Machine (v0.4.0).
+// ESP32 gateway for the Water Refill Machine (v0.4.1).
 //
 //   STM32 (machine control)  <--UART2-->  ESP32 (this)  <--MQTT/TLS-->  EMQX Cloud  <-->  Backend
 //
 // UART protocol (one text line per message, '\n' terminated):
-//   STM32 -> ESP32 : REQ_PAY,<volume_ml> | DONE,<tran_id>,<flow_ml>,<weight_g> | ERR,<code>
-//                    PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault> | PAID,ACK,<tran_id> | PAID,REJECT,<tran_id>,<fault>
-//                    PING | PONG | CANCEL
-//   ESP32 -> STM32 : QR,<tran_id>,<amount>,<currency>,<expires_s>,<qr_string>
-//                    PAID,<tran_id> | EXPIRED,<tran_id> | FAILED,<tran_id> | CANCELLED,<tran_id>
-//                    ACK,<tran_id> | NET,OK | NET,DOWN | PING | PONG
+// Contract: Implementation Plan section C3 (UART v1).
+//   STM32 -> ESP32 : REQ_PAY,<volume_ml> | CANCEL | CANCEL,<tran_id> | DONE,<tran_id>,<flow_ml>,<weight_g>
+//                    PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault> | ERR,<fault>[,<tran_id>]
+//                    PAID,ACK,<tran_id> | PAID,REJECT,<tran_id>,<fault> | PONG,<state>,<tran_id|0>,<tank>,<fault>
+//   ESP32 -> STM32 : QR,<tran_id>,<amount>,<currency>,<remaining_s>,<qr_string>
+//                    PAID,<tran_id> | EXPIRED,<tran_id> | FAILED,<tran_id|0> | CANCELLED,<tran_id>
+//                    ACK,<tran_id> | NET,OK | NET,DOWN | PING
+//
+// v0.4.1 fixes:
+//   - STM32 lines are no longer upper-cased (tran_ids are lowercase; DONE,<tran_id> was rejected)
+//   - QR countdown = expires_at - now (NTP); expired / foreign / locally-cancelled QRs are not shown
+//   - pay/status forwarded only for the current payment (PAID always: the STM32 checks the tran_id)
+//   - PONG with fields parsed; heartbeat in the C2 format (stm32 state, tank, fault)
+//   - ERR without tran_id is a fault report only (error topic), never a dispense outcome
+//   - pay/request retry per B4.7 (8 s, then +2 s, +5 s, +10 s) then FAILED,0
 //
 // v0.4.0 enhancements:
 //   - Non-Volatile Storage (NVS / Preferences) outcome queue (capacity 64, max age 7d)
@@ -27,7 +36,7 @@
 #include "secrets.h"
 #include "ca_cert.h"
 
-#define FW_VERSION          "0.4.0"
+#define FW_VERSION          "0.4.1"
 #define STM32_RX_PIN        16      // ESP32 RX2  <- STM32 TX
 #define STM32_TX_PIN        17      // ESP32 TX2  -> STM32 RX
 #define STM32_BAUD          115200
@@ -72,10 +81,16 @@ bool qrInvert = false;             // false = dark terminal theme, true = light 
 String currentTran, currentRequestId, lastQrString, lastStatus;
 int lastVolume = 0;
 
-// Retry policy for pay/request (Plan B4.7)
+// Retry policy for pay/request (Plan B4.7): no answer within 8 s -> resend after 2 s, 5 s, 10 s -> FAILED,0
+// Gap before resend 1, 2, 3, then the final wait for an answer after resend 3.
+const unsigned long REQ_WAIT_MS[] = {8000UL + 2000UL, 5000UL, 10000UL, 8000UL};
 bool awaitingQr = false;
 unsigned long lastReqTime = 0;
 int reqRetries = 0;
+String cancelledRequestId;          // request cancelled locally before its QR arrived (B4.7)
+
+// Last PONG from the STM32 (C3): PONG,<state>,<tran_id|0>,<tank>,<fault>
+String stm32State, stm32Tran, stm32Tank, stm32Fault;
 
 // Repeating PAID until PAID,ACK or PAID,REJECT
 bool repeatingPaid = false;
@@ -135,6 +150,20 @@ void publishJson(const char *suffix, JsonDocument &doc, bool retain = false) {
   serializeJson(doc, out);
   bool ok = mqtt.connected() && mqtt.publish(topic(suffix).c_str(), out.c_str(), retain);
   Serial.printf("  [mqtt] %s %s %s\n", ok ? "->" : "!! NOT SENT", suffix, out.c_str());
+}
+
+// Parse "YYYY-MM-DDTHH:MM:SS(.sss)Z" (UTC) to Unix seconds; returns 0 if not parseable.
+time_t parseIsoUtc(const char *s) {
+  int y, mo, d, h, mi, se;
+  if (!s || sscanf(s, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &se) != 6) return 0;
+  // days from civil date (H. Hinnant), independent of the TZ setting
+  y -= mo <= 2;
+  const int era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = (unsigned)(y - era * 400);
+  const unsigned doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const long days = (long)era * 146097L + (long)doe - 719468L;
+  return (time_t)(days * 86400L + h * 3600L + mi * 60L + se);
 }
 
 // ---------- NVS Queue Storage Functions ----------
@@ -341,23 +370,47 @@ void onMqttMessage(char *t, byte *payload, unsigned int len) {
   }
 
   if (tp.endsWith("/pay/qr")) {
-    String reqId = doc["request_id"].as<String>();
-    if (reqId.length() && currentRequestId.length() && reqId != currentRequestId) {
-      Serial.printf("  [mqtt] discarding stale/foreign QR (got %s, expected %s)\n", reqId.c_str(), currentRequestId.c_str());
+    String reqId = doc["request_id"].isNull() ? "" : doc["request_id"].as<String>();
+    String tranId = doc["tran_id"].as<String>();
+
+    // B4.7: the customer cancelled before this QR arrived -> tell the backend, never show it
+    if (reqId.length() && reqId == cancelledRequestId) {
+      JsonDocument c;
+      c["v"] = 1;
+      c["tran_id"] = tranId;
+      c["reason"] = "USER_CANCELLED";
+      publishJson("pay/cancel", c);
+      Serial.printf("  [mqtt] QR %s arrived after local cancel -> pay/cancel sent\n", tranId.c_str());
+      return;
+    }
+    // B4.7: only the QR for the request we are waiting for (legacy QR without request_id: only while waiting)
+    if (reqId.length() ? (reqId != currentRequestId) : !awaitingQr) {
+      Serial.printf("  [mqtt] discarding stale/foreign QR %s (request %s)\n", tranId.c_str(), reqId.c_str());
+      return;
+    }
+
+    // C3: the STM32 gets the REMAINING seconds; B4.7: drop a QR that has already expired
+    int remainingSec = 180;
+    time_t nowTs = time(nullptr);
+    if (!doc["expires_in_s"].isNull()) {
+      remainingSec = doc["expires_in_s"].as<int>();      // prototype backend
+    } else {
+      time_t expTs = parseIsoUtc(doc["expires_at"].as<const char *>());
+      if (expTs > 0 && nowTs > 1700000000) {
+        remainingSec = (int)(expTs - nowTs);
+      } else {
+        Serial.println("  [mqtt] cannot compute QR expiry (no expires_at or no NTP time); using 180 s");
+      }
+    }
+    if (remainingSec <= 0) {
+      Serial.printf("  [mqtt] discarding expired QR %s\n", tranId.c_str());
       return;
     }
 
     awaitingQr = false;
-    currentTran = doc["tran_id"].as<String>();
+    currentTran = tranId;
     lastQrString = doc["qr_string"].as<String>();
     lastStatus = "pending";
-
-    int remainingSec = 180;
-    if (!doc["expires_in_s"].isNull()) {
-      remainingSec = doc["expires_in_s"].as<int>();
-    } else if (!doc["expires_at"].isNull()) {
-      remainingSec = 180;
-    }
 
     String amount = doc["amount"].as<String>() + " " + doc["currency"].as<String>();
     toStm32("QR," + currentTran + "," + doc["amount"].as<String>() + "," + doc["currency"].as<String>() + "," +
@@ -370,10 +423,16 @@ void onMqttMessage(char *t, byte *payload, unsigned int len) {
     String tran = doc["tran_id"].isNull() ? String("0") : doc["tran_id"].as<String>();
     String reqId = doc["request_id"].isNull() ? "" : doc["request_id"].as<String>();
 
-    if (tran == currentTran || (reqId.length() && reqId == currentRequestId)) {
+    bool isCurrent = (currentTran.length() && tran == currentTran) || (reqId.length() && reqId == currentRequestId);
+    if (isCurrent) {
       awaitingQr = false;
       lastStatus = status;
+    } else if (status != "paid") {
+      // e.g. CANCELLED for a QR superseded by a newer request: must not reset the screen showing the new QR
+      Serial.printf("  [mqtt] ignoring %s for %s (not the current payment)\n", status.c_str(), tran.c_str());
+      return;
     }
+    // "paid" is always forwarded: the STM32 accepts it only for the QR it shows (C3 safety rule 3)
 
     if (status == "paid") {
       repeatingPaid = true;
@@ -429,12 +488,13 @@ void cancelPayment() {
   doc["reason"] = "USER_CANCELLED";
   publishJson("pay/cancel", doc);
 
+  cancelledRequestId = currentRequestId;   // a QR still in flight for it will be cancelled, not shown
   awaitingQr = false;
   repeatingPaid = false;
   currentTran = "";
   currentRequestId = "";
   lastStatus = "cancelled";
-  toStm32("CANCELLED,OK");
+  // No reply line: the STM32 already returned to idle when it sent CANCEL (C3 has no CANCELLED,OK)
   Serial.println("  Payment cancelled locally and cancel sent to backend");
 }
 
@@ -479,8 +539,11 @@ void handleLine(String line, bool fromUsb) {
                     lastStatus.length() ? lastStatus.c_str() : "-", FW_VERSION);
       Serial.printf("  [nvs queue] pending=%d  rejected=%u  dropped=%u\n",
                     outcomeCount, rejectedOutcomes, droppedOutcomes);
+      Serial.printf("  [stm32] state=%s tran=%s tank=%s fault=%s\n", stm32State.length() ? stm32State.c_str() : "-",
+                    stm32Tran.length() ? stm32Tran.c_str() : "-", stm32Tank.length() ? stm32Tank.c_str() : "-",
+                    stm32Fault.length() ? stm32Fault.c_str() : "-");
       return;
-    } else if (line == "D") {
+    } else if (key == "D") {
       if (lastStatus != "paid") { Serial.println("  Nothing to report - wait for PAID first"); return; }
       line = "DONE," + currentTran + "," + String(lastVolume - 2) + "," + String(lastVolume + 1);
     }
@@ -489,7 +552,26 @@ void handleLine(String line, bool fromUsb) {
   Serial.printf("  << %s: %s\n", fromUsb ? "you" : "STM32", line.c_str());
 
   if (line == "PING") { toStm32("PONG"); return; }
-  if (line == "PONG") { lastPong = millis(); stm32Lost = false; return; }
+  if (line == "PONG" || line.startsWith("PONG,")) {
+    lastPong = millis();
+    stm32Lost = false;
+    // PONG,<state>,<tran_id|0>,<tank>,<fault>
+    if (line.length() > 5) {
+      String f[4];
+      int start = 5;
+      for (int i = 0; i < 4; i++) {
+        int comma = line.indexOf(',', start);
+        f[i] = comma < 0 ? line.substring(start) : line.substring(start, comma);
+        if (comma < 0) break;
+        start = comma + 1;
+      }
+      stm32State = f[0];
+      stm32Tran = (f[1] == "0") ? "" : f[1];
+      stm32Tank = f[2];
+      stm32Fault = f[3];
+    }
+    return;
+  }
 
   int c1 = line.indexOf(',');
   String cmd = c1 < 0 ? line : line.substring(0, c1);
@@ -529,9 +611,10 @@ void handleLine(String line, bool fromUsb) {
     String fault = rest.substring(c + 1);
     enqueueOutcome(tranId.c_str(), "partial", flow, weight, fault.c_str(), (uint32_t)time(nullptr));
   } else if (cmd == "ERR") {
+    // C3: ERR,<fault>[,<tran_id>] - only an ERR that names a tran_id is a dispense outcome.
     int a = rest.indexOf(',');
     String fault = a < 0 ? rest : rest.substring(0, a);
-    String tranId = a < 0 ? currentTran : rest.substring(a + 1);
+    String tranId = a < 0 ? String("") : rest.substring(a + 1);
     if (tranId.length()) {
       enqueueOutcome(tranId.c_str(), "error", 0, 0, fault.c_str(), (uint32_t)time(nullptr));
     } else {
@@ -635,7 +718,7 @@ void loop() {
   }
 
   // Retry policy for pay/request (B4.7)
-  if (awaitingQr && (now - lastReqTime > 5000)) {
+  if (awaitingQr && (now - lastReqTime > REQ_WAIT_MS[reqRetries])) {
     if (reqRetries < 3) {
       reqRetries++;
       lastReqTime = now;
@@ -648,7 +731,7 @@ void loop() {
     } else {
       awaitingQr = false;
       lastStatus = "failed";
-      toStm32("FAILED,TIMEOUT");
+      toStm32("FAILED,0");   // B4.7 / C3: request failed -> STM32 shows "Service unavailable"
       Serial.println("  [req] pay/request timed out after 3 retries");
     }
   }
@@ -661,15 +744,25 @@ void loop() {
 
   if (mqtt.connected() && now - lastHeartbeat > HEARTBEAT_MS) {
     lastHeartbeat = now;
+    // C2 heartbeat
     JsonDocument doc;
+    doc["v"] = 1;
     doc["fw"] = FW_VERSION;
     doc["uptime_s"] = now / 1000;
     doc["rssi"] = WiFi.RSSI();
     doc["heap"] = ESP.getFreeHeap();
-    doc["stm32"] = stm32Lost ? "lost" : "ok";
+    JsonObject s32 = doc["stm32"].to<JsonObject>();
+    s32["link"] = stm32Lost ? "lost" : "ok";
+    if (!stm32Lost && stm32State.length()) {
+      s32["state"] = stm32State;
+      if (stm32Tran.length()) s32["tran_id"] = stm32Tran;
+      if (stm32Tank.length()) s32["tank"] = stm32Tank;
+      if (stm32Fault.length()) s32["fault"] = stm32Fault;
+    }
     doc["pending_outcomes"] = outcomeCount;
     doc["rejected_outcomes"] = rejectedOutcomes;
     doc["dropped_outcomes"] = droppedOutcomes;
+    if (time(nullptr) > 1700000000) doc["ts"] = (unsigned long)time(nullptr);
     String out;
     serializeJson(doc, out);
     mqtt.publish(topic("heartbeat").c_str(), out.c_str());
