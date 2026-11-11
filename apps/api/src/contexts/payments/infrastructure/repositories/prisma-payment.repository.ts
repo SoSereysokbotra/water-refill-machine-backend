@@ -334,19 +334,9 @@ export class PrismaPaymentRepository implements PaymentRepository {
 
   async recordDispense(dispense: Dispense, tx?: unknown): Promise<void> {
     const client = this.getClient(tx);
-    await client.dispense.upsert({
-      where: { tranId: dispense.tranId },
-      update: {
-        result: dispense.result,
-        flowMl: dispense.flowMl,
-        weightG: dispense.weightG,
-        diffPercent: new Prisma.Decimal(dispense.diffPercent),
-        fault: dispense.fault,
-        occurredAt: dispense.occurredAt,
-        clockSkew: dispense.clockSkew,
-        late: dispense.late,
-      },
-      create: {
+    // Insert only: the first recorded outcome is the audit record and is never overwritten (C1, D6)
+    await client.dispense.create({
+      data: {
         tranId: dispense.tranId,
         machineId: dispense.machineId,
         result: dispense.result,

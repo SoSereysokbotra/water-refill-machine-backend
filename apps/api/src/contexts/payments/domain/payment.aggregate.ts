@@ -276,16 +276,7 @@ export class Payment extends AggregateRoot {
 
     // If already finalized (DISPENSED, REFUNDED, REFUND_REJECTED) -> late outcome per C1
     if (this._status === 'DISPENSED' || this._status === 'REFUNDED' || this._status === 'REFUND_REJECTED') {
-      this.raise(
-        reconciliationNeededEvent(
-          {
-            tranId: this.tranId,
-            currentStatus: this._status,
-            lateOutcome: { result, flowMl, weightG, fault },
-          },
-          clock.now(),
-        ),
-      );
+      this.recordLateOutcome({ result, flowMl, weightG, fault, clock });
       return { isLate: true, suggestedRefundMinor: 0 };
     }
 
@@ -333,6 +324,29 @@ export class Payment extends AggregateRoot {
     }
 
     return { isLate: false, suggestedRefundMinor };
+  }
+
+  /**
+   * C1: an outcome that arrives after the payment left PAID / DISPENSE_UNKNOWN (or that differs from the
+   * outcome already recorded). The payment is NOT changed; an operator must reconcile it.
+   */
+  recordLateOutcome(params: {
+    result: 'ok' | 'partial' | 'error';
+    flowMl: number;
+    weightG: number;
+    fault?: string | null;
+    clock: Clock;
+  }): void {
+    this.raise(
+      reconciliationNeededEvent(
+        {
+          tranId: this.tranId,
+          currentStatus: this._status,
+          lateOutcome: { result: params.result, flowMl: params.flowMl, weightG: params.weightG, fault: params.fault },
+        },
+        params.clock.now(),
+      ),
+    );
   }
 
   // Backward compatibility alias for Phase 2 tests
