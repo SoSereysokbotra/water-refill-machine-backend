@@ -9,7 +9,7 @@
 | **Status** | Approved plan — progress is tracked in **[PROGRESS.md](../PROGRESS.md)** (not in this file) |
 | **Owner** | Backend (also owns the ESP32 gateway) |
 | **Prototype** | `backend/` (Node.js) stays running until Phase 2 cut-over |
-| **Last updated** | 2026-11-08 |
+| **Last updated** | 2026-11-12 |
 
 ### Revision history
 
@@ -33,6 +33,7 @@
 | v3 | **Early pilot** (Phase 3.5) running in parallel; go-live ≈ week 20 | Pilot could not fit in a 2-week phase |
 | v3 | Architecture and Deployment docs re-synchronised | Document drift |
 | v3.1 | **C10 ABA PayWay API reference** (moved out of prototype code); **Read before starting** per phase | Prototype is deleted after Phase 3; agents need every input listed |
+| v3.2 | Phase 0–3 review fixes: operator endpoints via `X-Admin-Key` until Phase 6 (C7, B5 `ADMIN_API_KEY`); `payments.reconcile_count` (C6); minimal `heartbeat`/`online` consumer pulled into Phase 3 (Phase 4 task 2) | Refund guards need `pending_outcomes`; the pilot needs operator access before login exists |
 | v3.1 | AI-agent handoff: `PROGRESS.md`, task tags `[HUMAN]` / `[HARDWARE]` / `[MANUAL CHECK]`, **Needs before starting** per phase, handoff DoD item, B8 commit style | Several developers / AI agents continue each other's phases |
 
 ---
@@ -306,6 +307,7 @@ All environment variables are **validated with Zod at startup** (fail fast).
 | `REFUND_CLAIM_MINUTES` | `30` | api |
 | `MACHINE_OFFLINE_AFTER_SECONDS` | `180` | worker |
 | `RETENTION_OUTBOX_DAYS` / `RETENTION_INBOX_DAYS` / `RETENTION_HEARTBEAT_DAYS` | `7` / `7` / `30` | worker |
+| `ADMIN_API_KEY` | ≥ 32 chars, *secret* (unset = operator endpoints disabled outside `local`) | api (until Phase 6) |
 | `AUTH_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `SENTRY_DSN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LOG_LEVEL` | | various |
 
 **Connection budget (no PgBouncer):** Prisma pool per process = `connection_limit` in `DATABASE_URL`. Production: api 2 × 5 + worker 1 × 5 = **15 client connections** + 1–2 for migrations ⇒ fits a managed PostgreSQL plan with ≥ 25 connections. Add PgBouncer / managed pooler only when this budget is exceeded (ADR-0011). No session-scoped PostgreSQL features (`LISTEN`, advisory session locks) are used, so a pooler can be added later without code changes.
@@ -586,6 +588,7 @@ model Payment {
   abaApv              String?       @map("aba_apv")
   nextAbaCheckAt      DateTime?     @map("next_aba_check_at")
   abaCheckCount       Int           @default(0) @map("aba_check_count")
+  reconcileCount      Int           @default(0) @map("reconcile_count")   // reconcile probes after the payment ended (B4.8)
   lastAbaCheckAt      DateTime?     @map("last_aba_check_at")
   closedAt            DateTime?     @map("closed_at")          // ABA close-transaction done
   refundedAmountMinor Int?          @map("refunded_amount_minor")
@@ -736,7 +739,7 @@ model AuditLog {
 
 ## C7 REST API
 
-Base `/v1`. Responses `{ data }` / `{ error: { code, message, details?, traceId } }`; cursor pagination (max 100). Until Phase 6, operator/admin endpoints exist **only** with `APP_ENV=local`.
+Base `/v1`. Responses `{ data }` / `{ error: { code, message, details?, traceId } }`; cursor pagination (max 100). Until Phase 6: dev endpoints (`/v1/payments/dev/*`, `/dev`) exist **only** with `APP_ENV=local` (404 elsewhere); operator/admin endpoints are open with `APP_ENV=local` and otherwise require header `X-Admin-Key` = `ADMIN_API_KEY` (disabled if unset). Callers send `actorId` in the body until login exists.
 
 | Method & path | Role | Purpose | Phase |
 |---|---|---|---|
@@ -1302,7 +1305,7 @@ The pilot runs **in parallel with Phases 4–10** (≈ 11 weeks) and is the evid
 
 **Tasks**
 1. Fleet service (2-layer): provisioning (`POST /v1/machines`: row + default prices + MQTT username + one-time password; EMQX credential via EMQX management API if available, otherwise documented manual step — verify in this phase), enable/disable, prices (fixed tiers), currency, credential rotation, decommission; replaces temporary `MachinePort`.
-2. Consumers `heartbeat` (updates `last_stm32_state`, `pending_outcomes`), `online`, `config/ack`; retained `config` on `MachineConfigChanged`; `sweep.fleet-offline`.
+2. Consumers `heartbeat` (updates `last_stm32_state`, `pending_outcomes`), `online` — **minimal version already added in Phase 3** (`contexts/fleet`, `MachinePresenceService`); extend it here — `config/ack`; retained `config` on `MachineConfigChanged`; `sweep.fleet-offline`.
 3. **ESP32 firmware v0.5** (`[HUMAN]` flashes): `config` → `CFG` until `CFG,OK` → `config/ack`; resend after STM32 reboot (`PONG` state); full heartbeat.
 4. Heartbeat retention (30 days).
 
