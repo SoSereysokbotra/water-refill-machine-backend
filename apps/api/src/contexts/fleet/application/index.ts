@@ -1,1 +1,1 @@
-export const FLEET_APPLICATION = 'fleet/application';
+export * from './machine-presence.service';

@@ -61,10 +61,22 @@ export class DispensingSweep extends BaseSweep<Payment> {
     }
 
     if (item.status === 'DISPENSE_UNKNOWN') {
-      // Evaluate 24h escalation:
-      // Check if machine reports pending_outcomes > 0
-      const pendingOutcomes = await this.repo.getMachinePendingOutcomes(item.machineId);
+      // C1: escalate only if the machine was online after the payment AND holds no unsent results.
+      // Invariant: no refund decision while the outcome may still be in the ESP32 NVS queue.
+      const presence = await this.repo.getMachinePresence(item.machineId);
+      const seenSincePayment =
+        presence.lastSeenAt !== null && item.paidAt !== null && presence.lastSeenAt.getTime() > item.paidAt.getTime();
 
+      if (!seenSincePayment) {
+        // C1: machine not online since the payment -> site check needed, stay DISPENSE_UNKNOWN
+        // (Telegram alert comes with Monitoring in Phase 5)
+        this.logger.warn(
+          `Payment ${item.tranId}: machine ${item.machineId} not seen online since payment; site check needed, holding in DISPENSE_UNKNOWN`,
+        );
+        return;
+      }
+
+      const pendingOutcomes = presence.pendingOutcomes;
       if (pendingOutcomes === 0) {
         // Machine has communicated and has 0 queued outcomes -> safe to open refund case
         await this.uow.run(

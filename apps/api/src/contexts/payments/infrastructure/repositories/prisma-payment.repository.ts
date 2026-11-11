@@ -458,6 +458,18 @@ export class PrismaPaymentRepository implements PaymentRepository {
     return machine?.pendingOutcomes ?? 0;
   }
 
+  async getMachinePresence(
+    machineId: string,
+    tx?: unknown,
+  ): Promise<{ pendingOutcomes: number; lastSeenAt: Date | null }> {
+    const client = this.getClient(tx);
+    const machine = await client.machine.findUnique({
+      where: { id: machineId },
+      select: { pendingOutcomes: true, lastSeenAt: true },
+    });
+    return { pendingOutcomes: machine?.pendingOutcomes ?? 0, lastSeenAt: machine?.lastSeenAt ?? null };
+  }
+
   private async recordEvents(payment: Payment, client: Prisma.TransactionClient | PrismaService): Promise<void> {
     if (payment.stateChanges.length === 0) return;
 
