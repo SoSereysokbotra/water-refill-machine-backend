@@ -104,8 +104,7 @@ struct LineReader {
       if (c == '\n') {
         out = buf;
         buf = "";
-        out.trim();
-        out.toUpperCase();
+        out.trim();   // never change case: tran_ids are lowercase (C3)
         if (out.length()) return true;
         continue;
       }
@@ -441,20 +440,39 @@ void cancelPayment() {
 
 void handleLine(String line, bool fromUsb) {
   if (fromUsb) {
-    if (line == "1") line = "REQ_PAY,500";
-    else if (line == "2") line = "REQ_PAY,750";
-    else if (line == "3") line = "REQ_PAY,1000";
-    else if (line == "C" || line == "CANCEL") line = "CANCEL";
-    else if (line == "H" || line == "HELP" || line == "?") { printMenu(); return; }
-    else if (line == "I") {
+    // Test menu: case-insensitive shortcuts and keywords. Never upper-case tran_ids.
+    String key = line;
+    key.toUpperCase();
+    int kc = line.indexOf(',');
+    if (kc > 0) {
+      String kw = line.substring(0, kc);
+      kw.toUpperCase();
+      String rest = line.substring(kc + 1);
+      // PAID,ACK / PAID,REJECT: the sub-keyword is a keyword too
+      int kc2 = rest.indexOf(',');
+      if (kw == "PAID" && kc2 > 0) {
+        String sub = rest.substring(0, kc2);
+        sub.toUpperCase();
+        rest = sub + rest.substring(kc2);
+      }
+      line = kw + "," + rest;
+    } else {
+      line = key;
+    }
+    if (key == "1") line = "REQ_PAY,500";
+    else if (key == "2") line = "REQ_PAY,750";
+    else if (key == "3") line = "REQ_PAY,1000";
+    else if (key == "C" || key == "CANCEL") line = "CANCEL";
+    else if (key == "H" || key == "HELP" || key == "?") { printMenu(); return; }
+    else if (key == "I") {
       qrInvert = !qrInvert;
       Serial.printf("  QR colours: %s terminal theme\n", qrInvert ? "LIGHT" : "DARK");
       if (lastQrString.length()) printQr(lastQrString);
       return;
-    } else if (line == "Q") {
+    } else if (key == "Q") {
       if (lastQrString.length()) printQr(lastQrString); else Serial.println("  No QR yet - type 1, 2 or 3");
       return;
-    } else if (line == "S" || line == "STATUS") {
+    } else if (key == "S" || key == "STATUS") {
       Serial.printf("  wifi=%s  mqtt=%s  stm32=%s  tran=%s (%s)  fw=%s\n",
                     WiFi.isConnected() ? "up" : "DOWN", mqtt.connected() ? "up" : "DOWN",
                     stm32Lost ? "not connected" : "ok", currentTran.length() ? currentTran.c_str() : "-",
