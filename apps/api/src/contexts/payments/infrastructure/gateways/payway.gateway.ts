@@ -207,15 +207,11 @@ export class PayWayGatewayAdapter implements PaymentGateway {
   }
 
   async refund(tranId: string, amount: number, currency: Currency): Promise<void> {
-    const time = reqTime();
-    const hash = sign(`${time}${this.merchantId}${tranId}${amount}`, this.apiKey);
-    await this.postJson<any>('/api/payment-gateway/v1/payments/refund', {
-      req_time: time,
-      merchant_id: this.merchantId,
-      tran_id: tranId,
-      amount,
-      currency,
-      hash,
-    });
+    // ABA has not confirmed a KHQR refund API, its endpoint, fields or hash (Plan C10.5, F3 Q7).
+    // Never call a guessed endpoint and treat the result as success: refunds stay manual (REFUND_MODE=manual).
+    throw new GatewayRejectedError(
+      `ABA refund API not confirmed (C10.5); refund ${tranId} ${amount} ${currency} manually`,
+      null,
+    );
   }
 }

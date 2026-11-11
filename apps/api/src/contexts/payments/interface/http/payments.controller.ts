@@ -1,6 +1,8 @@
-import { Body, Controller, Get, Header, HttpCode, Inject, Logger, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Inject, Ip, Logger, Param, Post, UseGuards } from '@nestjs/common';
 import { AdminKeyGuard, LocalOnlyGuard } from '../../../../platform/security/access.guards';
 import { QueueService } from '../../../../platform/queues/queue.service';
+import { RateLimiterService } from '../../../../platform/rate-limit/rate-limiter.service';
+import { ConfigService } from '../../../../platform/config/config.service';
 import {
   ConfirmPaymentCommand,
   ConfirmPaymentHandler,
@@ -21,11 +23,20 @@ export class PaymentsController {
     @Inject(CreatePaymentHandler) private readonly createPaymentHandler: CreatePaymentHandler,
     @Inject(RecordDispenseHandler) private readonly recordDispenseHandler: RecordDispenseHandler,
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
+    @Inject(RateLimiterService) private readonly limiter: RateLimiterService,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   @Post(['v1/payway/callback', 'v1/payments/aba/callback'])
   @HttpCode(200)
-  async handleCallback(@Body() body: Record<string, unknown>): Promise<{ status: string }> {
+  async handleCallback(@Body() body: Record<string, unknown>, @Ip() ip: string): Promise<{ status: string }> {
+    // C7: CALLBACK_RATE_LIMIT_PER_MIN per IP (throws RateLimitError -> 429)
+    await this.limiter.consume(`callback:${ip}`, 1, {
+      points: this.config.get('CALLBACK_RATE_LIMIT_PER_MIN'),
+      duration: 60,
+      keyPrefix: 'rl_callback',
+    });
+
     const tranId = typeof body?.tran_id === 'string' ? body.tran_id : null;
     this.logger.log(`Received PayWay callback: tran_id=${tranId}`);
 

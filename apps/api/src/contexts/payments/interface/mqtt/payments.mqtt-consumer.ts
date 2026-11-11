@@ -9,6 +9,7 @@ import {
 } from '@wrm/contracts';
 import { toErrorCode } from '../../../../shared-kernel/errors';
 import { MqttService } from '../../../../platform/mqtt/mqtt.service';
+import { ConfigService } from '../../../../platform/config/config.service';
 import { RateLimiterService } from '../../../../platform/rate-limit/rate-limiter.service';
 import {
   CancelPaymentCommand,
@@ -31,6 +32,7 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     @Inject(CancelPaymentHandler) private readonly cancelPaymentHandler: CancelPaymentHandler,
     @Inject(RecordDispenseHandler) private readonly recordDispenseHandler: RecordDispenseHandler,
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -66,7 +68,12 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     const { request_id, volume_ml } = parsed.data;
 
     try {
-      await this.limiter.consume(`pay:${machineId}`, 1, { points: 3, duration: 3, keyPrefix: 'rl_pay' });
+      // B5: at most PAY_REQUEST_BURST requests per PAY_REQUEST_MIN_INTERVAL_MS window per machine
+      await this.limiter.consume(`pay:${machineId}`, 1, {
+        points: this.config.get('PAY_REQUEST_BURST'),
+        duration: Math.max(1, Math.ceil(this.config.get('PAY_REQUEST_MIN_INTERVAL_MS') / 1000)),
+        keyPrefix: 'rl_pay',
+      });
     } catch {
       this.logger.warn(`Rate limit exceeded for machine ${machineId} on pay/request`);
       await this.publishStatus(machineId, null, 'failed', 'RATE_LIMITED', request_id);
