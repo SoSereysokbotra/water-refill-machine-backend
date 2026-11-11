@@ -36,12 +36,14 @@ describe('Payment Sweeps & Reconcile Integration (Phase 2 DoD)', () => {
   }, 30000);
 
   beforeEach(async () => {
+    await prisma.refundCase.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.dispense.deleteMany({ where: { machineId: testMachineId } });
     await prisma.paymentEvent.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.payment.deleteMany({ where: { machineId: testMachineId } });
   });
 
   afterAll(async () => {
+    await prisma.refundCase.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.dispense.deleteMany({ where: { machineId: testMachineId } });
     await prisma.paymentEvent.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.payment.deleteMany({ where: { machineId: testMachineId } });
@@ -128,6 +130,12 @@ describe('Payment Sweeps & Reconcile Integration (Phase 2 DoD)', () => {
     const events = await prisma.paymentEvent.findMany({ where: { tranId } });
     const statuses = events.map((e) => e.toStatus);
     expect(statuses).toContain('REFUND_REVIEW');
+
+    // C1: late payment -> refund case with 100 % suggested refund, so an operator can act on it
+    const refundCase = await prisma.refundCase.findUnique({ where: { tranId } });
+    expect(refundCase?.reason).toBe('LATE_PAYMENT');
+    expect(refundCase?.status).toBe('open');
+    expect(refundCase?.suggestedAmountMinor).toBe(payment?.amountMinor);
   });
 
   it('reconcile keeps probing after the first probe even when many ABA polls happened while pending (B4.8)', async () => {
