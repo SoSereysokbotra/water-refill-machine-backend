@@ -41,11 +41,18 @@ export const configSchema = z.object({
   RETENTION_HEARTBEAT_DAYS: z.coerce.number().int().positive().default(30),
 
   AUTH_SECRET: z.string().min(16).default('dev_secret_must_change_in_production_32chars'),
+  // Operator/admin REST access before Phase 6 (header X-Admin-Key). Required outside APP_ENV=local
+  // for refund endpoints to work; unset = those endpoints are disabled.
+  ADMIN_API_KEY: z.string().min(32).optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
   SENTRY_DSN: z.string().optional(),
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional(),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  // Invariant: production must never accept mock payments.
+}).refine((c) => !(c.APP_ENV === 'production' && c.PAYWAY_MODE === 'mock'), {
+  message: 'PAYWAY_MODE=mock is not allowed when APP_ENV=production',
+  path: ['PAYWAY_MODE'],
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

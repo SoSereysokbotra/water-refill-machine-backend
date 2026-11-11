@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Inject, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { AdminKeyGuard } from '../../../../platform/security/access.guards';
 import {
   ClaimRefundCaseCommand,
   ClaimRefundCaseHandler,
@@ -14,7 +15,9 @@ import {
   ResolveUnknownDispenseHandler,
 } from '../../application';
 
+// Operator/admin endpoints: local-only or X-Admin-Key until Phase 6 (Plan §C7)
 @Controller('v1')
+@UseGuards(AdminKeyGuard)
 export class RefundCasesController {
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
