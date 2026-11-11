@@ -46,9 +46,7 @@ export class ExpirePaymentHandler {
         const p = await this.repo.get(cmd.tranId, tx);
         if (p.status !== 'PENDING') return;
 
-        p.expire(this.clock);
-        // Start reconcile probe schedule at +5 min
-        p.scheduleNextAbaCheck(new Date(this.clock.now().getTime() + 5 * 60 * 1000), this.clock);
+        p.expire(this.clock); // starts the reconcile schedule (B4.8)
 
         await this.repo.save(p, tx);
         await this.outbox.add(p.pullEvents(), tx, 'Payment', p.tranId);

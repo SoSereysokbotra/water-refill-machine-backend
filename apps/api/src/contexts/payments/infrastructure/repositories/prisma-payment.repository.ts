@@ -33,6 +33,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
     abaApv: string | null;
     nextAbaCheckAt: Date | null;
     abaCheckCount: number;
+    reconcileCount: number;
     lastAbaCheckAt: Date | null;
     closedAt: Date | null;
     refundedAmountMinor: number | null;
@@ -55,6 +56,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
       abaApv: row.abaApv,
       nextAbaCheckAt: row.nextAbaCheckAt,
       abaCheckCount: row.abaCheckCount,
+      reconcileCount: row.reconcileCount,
       lastAbaCheckAt: row.lastAbaCheckAt,
       closedAt: row.closedAt,
       refundedAmountMinor: row.refundedAmountMinor,
@@ -207,6 +209,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
         abaApv: payment.abaApv,
         nextAbaCheckAt: payment.nextAbaCheckAt,
         abaCheckCount: payment.abaCheckCount,
+        reconcileCount: payment.reconcileCount,
         lastAbaCheckAt: payment.lastAbaCheckAt,
         closedAt: payment.closedAt,
         refundedAmountMinor: payment.refundedAmountMinor,
@@ -237,6 +240,7 @@ export class PrismaPaymentRepository implements PaymentRepository {
         abaApv: payment.abaApv,
         nextAbaCheckAt: payment.nextAbaCheckAt,
         abaCheckCount: payment.abaCheckCount,
+        reconcileCount: payment.reconcileCount,
         lastAbaCheckAt: payment.lastAbaCheckAt,
         closedAt: payment.closedAt,
         refundedAmountMinor: payment.refundedAmountMinor,

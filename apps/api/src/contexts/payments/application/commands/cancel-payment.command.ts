@@ -37,9 +37,7 @@ export class CancelPaymentHandler {
         const p = await this.repo.get(payment.tranId, tx);
         if (p.status !== 'PENDING') return;
 
-        p.cancel(cmd.reason, this.clock);
-        // Start reconcile probe schedule at +5 min per B4.8
-        p.scheduleNextAbaCheck(new Date(this.clock.now().getTime() + 5 * 60 * 1000), this.clock);
+        p.cancel(cmd.reason, this.clock); // starts the reconcile schedule (B4.8)
 
         await this.repo.save(p, tx);
         await this.outbox.add(p.pullEvents(), tx, 'Payment', p.tranId);
