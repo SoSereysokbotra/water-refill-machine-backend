@@ -174,7 +174,9 @@ void link_handle_line(char *l) {
             uart_printf("PAID,REJECT,%s,PAID_NOT_ACCEPTED\n", t);
         }
     } else if (starts_with(l, "EXPIRED,") || starts_with(l, "FAILED,") || starts_with(l, "CANCELLED,")) {
-        if (state == WAIT_QR || state == QR) go_welcome();
+        char *t = strchr(l, ',') + 1;
+        /* only for the QR on screen; FAILED,0 = our request failed while waiting for a QR */
+        if ((state == QR && strcmp(t, shown_tran) == 0) || (state == WAIT_QR && strcmp(t, "0") == 0)) go_welcome();
     } else if (starts_with(l, "ACK,")) {
         if (strcmp(l + 4, saved_result.tran) == 0) clear_saved_result();
     } else if (strcmp(l, "PING") == 0) {
@@ -208,14 +210,12 @@ Safety rules (stop by itself, bottle timeout, keep result in flash) are in [stat
 | Item | Status |
 |---|---|
 | Backend + ABA sandbox | ✅ Working (USD, prices 0.15 / 0.20 / 0.25, QR lifetime 3 min) |
-| ESP32 gateway v0.2.0 | ✅ Working: `REQ_PAY`, `QR`, `PAID`, `EXPIRED`, `FAILED`, `DONE`, `ERR`, `NET`, `PING` |
-| ESP32 support for `PAID,ACK`, `ACK`, `CANCEL`, `PARTIAL`, `PONG,<fields>` | ⏳ Firmware v0.3/v0.4 (Phases 2–3) |
+| ESP32 gateway v0.4.1 | ✅ Builds; implements the full §C3 list above (`PAID,ACK`/`REJECT`, `ACK`, `CANCEL`, `PARTIAL`, `PONG,<fields>`). Flash + test on the real board still pending |
 | STM32 UART + LCD QR | ⏳ Hardware developer |
 
-**Testing with ESP32 v0.2.0 (until v0.3/v0.4):**
-- v0.2.0 only understands a plain `PONG`. A full `PONG,IDLE,0,FULL,NONE` is printed as "Unknown command" and the ESP32 thinks the STM32 link is lost. Payments still work.
-- v0.2.0 **never sends `ACK,<tran_id>`**. An STM32 that resends `DONE` every 2 s until ACK will repeat forever. For early tests, add a test switch in the STM32 code: send the result **once**, don't wait for ACK.
-- `PAID,ACK`, `PAID,REJECT`, `CANCEL` and `PARTIAL` show "Unknown command" on the ESP32 monitor. That's harmless.
+**Notes for testing with the ESP32:**
+- Keep `tran_id`s exactly as received (lowercase). Firmware before v0.4.1 upper-cased STM32 lines, so `DONE` was rejected — use v0.4.1 or later.
+- `EXPIRED` / `FAILED` / `CANCELLED` carry the `tran_id`: act on them only if it is the QR you show (`FAILED,0` = your request failed while waiting for a QR).
 
 ## Related
 - [Implementation Plan §C3](backend-implementation-plan.md): full UART contract
