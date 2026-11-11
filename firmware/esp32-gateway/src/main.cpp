@@ -172,7 +172,7 @@ void loadNvsQueue() {
 
 uint32_t calculateBackoffMs(uint16_t attempts) {
   uint32_t base = 5000UL * (1UL << min((int)attempts, 6)); // 5s -> 10s -> 20s -> 40s -> 80s -> 160s -> 320s
-  uint32_t capped = min(base, 300000UL);                  // max 5 min per Plan E Phase 3
+  uint32_t capped = min(base, (uint32_t)300000UL);        // max 5 min per Plan E Phase 3
   uint32_t jitter = esp_random() % 1000UL;
   return capped + jitter;
 }
