@@ -2,25 +2,9 @@ import { PrismaClient, Currency } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// Seed = test data only. Schema, indexes and constraints come from prisma/migrations
+// (run `pnpm --filter @wrm/api db:deploy` first).
 export async function seedDatabase() {
-  console.log('[Seed] Applying raw SQL constraints & indexes...');
-  await prisma.$executeRawUnsafe(`
-    CREATE UNIQUE INDEX IF NOT EXISTS one_open_payment_per_machine
-    ON payments(machine_id)
-    WHERE status IN ('PENDING','PAID');
-  `);
-
-  await prisma.$executeRawUnsafe(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'tier_check'
-      ) THEN
-        ALTER TABLE machine_prices ADD CONSTRAINT tier_check CHECK (volume_ml IN (500, 750, 1000));
-      END IF;
-    END $$;
-  `);
-
   console.log('[Seed] Seeding WRM-001 and WRM-900...');
   const machines = [
     {
