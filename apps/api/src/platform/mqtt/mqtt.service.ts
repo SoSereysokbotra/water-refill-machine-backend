@@ -115,9 +115,11 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private subscribeTopic(topic: string): Promise<void> {
     const sharedGroup = this.config.get('MQTT_SHARED_GROUP');
     // If not already a shared subscription and contains wildcards, use shared subscription
-    const fullTopic = topic.startsWith('$share/')
-      ? topic
-      : `$share/${sharedGroup}/${topic}`;
+    const hasWildcards = topic.includes('+') || topic.includes('#');
+    const fullTopic =
+      topic.startsWith('$share/') || !hasWildcards
+        ? topic
+        : `$share/${sharedGroup}/${topic}`;
 
     return new Promise<void>((resolve, reject) => {
       this.client.subscribe(fullTopic, { qos: 1 }, (err) => {
@@ -172,7 +174,16 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     if (!this.client) return;
     this.logger.log('Disconnecting from MQTT broker...');
     return new Promise<void>((resolve) => {
-      this.client.end(false, {}, () => {
+      const timer = setTimeout(() => {
+        try {
+          this.client?.end(true);
+        } catch {
+          // ignore
+        }
+        resolve();
+      }, 1000);
+      this.client.end(true, {}, () => {
+        clearTimeout(timer);
         this.logger.log('MQTT client closed.');
         resolve();
       });

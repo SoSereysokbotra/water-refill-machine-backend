@@ -50,8 +50,23 @@ describe('Phase 5 Acceptance (E2E)', () => {
   const MACHINE_ID = 'WRM-9501';
 
   const clean = async () => {
-    await prisma.alert.deleteMany({});
-    await prisma.outbox.deleteMany({});
+    await prisma.alert.deleteMany({
+      where: {
+        OR: [
+          { machineId: MACHINE_ID },
+          { dedupeKey: { contains: MACHINE_ID } },
+          { id: { startsWith: 'alt-test-' } },
+        ],
+      },
+    });
+    await prisma.outbox.deleteMany({
+      where: {
+        OR: [
+          { aggregateId: MACHINE_ID },
+          { payload: { path: ['data', 'machineId'], equals: MACHINE_ID } },
+        ],
+      },
+    });
     await prisma.heartbeat.deleteMany({ where: { machineId: MACHINE_ID } });
     await prisma.dispenseRejection.deleteMany({ where: { machineId: MACHINE_ID } });
     await prisma.dispense.deleteMany({ where: { machineId: MACHINE_ID } });
@@ -66,10 +81,16 @@ describe('Phase 5 Acceptance (E2E)', () => {
     app.inject({ method, url, payload });
 
   const dispatchOutbox = async (_machineId?: string) => {
-    // Process all pending outbox rows, including any cascaded events (e.g. AlertRaised)
+    // Process all pending outbox rows for this test machine
     for (let round = 0; round < 5; round++) {
       const rows = await prisma.outbox.findMany({
-        where: { dispatchedAt: null },
+        where: {
+          dispatchedAt: null,
+          OR: [
+            { aggregateId: MACHINE_ID },
+            { payload: { path: ['data', 'machineId'], equals: MACHINE_ID } },
+          ],
+        },
         orderBy: { occurredAt: 'asc' },
       });
 
@@ -124,8 +145,8 @@ describe('Phase 5 Acceptance (E2E)', () => {
     const notifier = app.get(TelegramNotifierService);
     (notifier as any).telegramClient = fakeTelegram;
     const origEnqueue = notifier.enqueue.bind(notifier);
+    (notifier as any).origEnqueue = origEnqueue;
     notifier.enqueue = async (job) => {
-      await origEnqueue(job);
       try {
         await notifier.processJob(job);
       } catch {
@@ -430,5 +451,73 @@ describe('Phase 5 Acceptance (E2E)', () => {
 
     const realClient = new TelegramClient(realConfig);
     await expect(realClient.sendMessage('Test without telegram configured')).resolves.not.toThrow();
+  });
+
+  // 11. Idempotency - handling the same AlertRaised event twice sends 1 Telegram message
+  it('Scenario 11: Telegram jobs are idempotent via deterministic jobId', async () => {
+    fakeTelegram.clear();
+    const notifier = app.get(TelegramNotifierService);
+    const origEnqueue = (notifier as any).origEnqueue;
+
+    const alertId = `alt-test-idempotent-${Date.now()}`;
+    const job = {
+      action: 'raise' as const,
+      alertId,
+      type: 'MACHINE_OFFLINE',
+      severity: 'critical',
+      message: 'Machine is offline',
+      machineId: MACHINE_ID,
+    };
+
+    // Dispatch the same job twice
+    await origEnqueue(job);
+    await origEnqueue(job);
+
+    await waitForTelegramMessages(1);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(fakeTelegram.messages).toHaveLength(1);
+  });
+
+  it('Scenario 12: Handling the same AlertRaised event twice -> Telegram receives 1 message', async () => {
+    fakeTelegram.clear();
+    const handlers = registry.handlersFor('monitoring.AlertRaised');
+    const raisedHandler = handlers.find((h) => h.name === 'MonitoringTelegramRaisedHandler');
+    expect(raisedHandler).toBeDefined();
+
+    const notifier = app.get(TelegramNotifierService);
+    const origEnqueue = (notifier as any).origEnqueue;
+    // Temporarily restore real enqueue for the outbox handler to test queue deduplication
+    notifier.enqueue = origEnqueue;
+
+    const alertId = `alt-test-idemp-${Date.now()}`;
+    const event = {
+      eventId: `evt-test-idemp-${Date.now()}`,
+      type: 'monitoring.AlertRaised',
+      data: {
+        alertId,
+        type: 'FAULT_REPORTED',
+        severity: 'critical',
+        message: 'Motor stuck',
+        machineId: MACHINE_ID,
+        count: 1,
+      },
+      occurredAt: new Date(),
+      version: 1,
+    };
+
+    // Handle same event twice
+    await raisedHandler!.handler(event as any);
+    await raisedHandler!.handler(event as any);
+
+    await waitForTelegramMessages(1);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(fakeTelegram.messages).toHaveLength(1);
+
+    // Revert notifier.enqueue wrapper
+    notifier.enqueue = async (j) => {
+      try {
+        await notifier.processJob(j);
+      } catch {}
+    };
   });
 });

@@ -1,5 +1,6 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { Queue } from 'bullmq';
+import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Queue, Worker } from 'bullmq';
+import { ConfigService } from '../../../../platform/config/config.service';
 import { QueueService } from '../../../../platform/queues/queue.service';
 import { ITelegramClient, TELEGRAM_CLIENT } from './telegram.client';
 
@@ -14,13 +15,15 @@ export interface TelegramNotificationJob {
 }
 
 @Injectable()
-export class TelegramNotifierService implements OnModuleInit {
+export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramNotifierService.name);
   private queue!: Queue<TelegramNotificationJob>;
+  private worker?: Worker<TelegramNotificationJob>;
 
   constructor(
     @Inject(QueueService) private readonly queueService: QueueService,
     @Inject(TELEGRAM_CLIENT) private readonly telegramClient: ITelegramClient,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   onModuleInit(): void {
@@ -34,7 +37,13 @@ export class TelegramNotifierService implements OnModuleInit {
       removeOnFail: { count: 500 },
     });
 
-    this.queueService.createWorker<TelegramNotificationJob>(
+    const runMode = this.config.get('RUN_MODE');
+    if (runMode === 'api') {
+      this.logger.log('TelegramNotifier worker disabled in RUN_MODE=api');
+      return;
+    }
+
+    this.worker = this.queueService.createWorker<TelegramNotificationJob>(
       'notify.telegram',
       async (job) => {
         await this.processJob(job.data);
@@ -43,8 +52,26 @@ export class TelegramNotifierService implements OnModuleInit {
     );
   }
 
+  async onModuleDestroy(): Promise<void> {
+    if (this.worker) {
+      await Promise.race([
+        this.worker.close(),
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            this.worker?.close(true).catch(() => {});
+            resolve();
+          }, 1000),
+        ),
+      ]);
+    }
+    if (this.queue) {
+      await this.queue.close();
+    }
+  }
+
   async enqueue(job: TelegramNotificationJob): Promise<void> {
-    await this.queue.add('notify', job);
+    const jobId = `${job.alertId}__${job.action}`;
+    await this.queue.add('notify', job, { jobId });
   }
 
   async processJob(job: TelegramNotificationJob): Promise<void> {

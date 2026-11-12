@@ -24,6 +24,12 @@ describe('Phase 2 E2E Payment & Dispense Flow', () => {
     prisma = app.get(PrismaService);
     mqtt = app.get(MqttService);
 
+    // Wait for MQTT client to connect
+    for (let i = 0; i < 20; i++) {
+      if (mqtt.isHealthy()) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
     await prisma.dispense.deleteMany({ where: { machineId: testMachineId } });
     await prisma.paymentEvent.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.payment.deleteMany({ where: { machineId: testMachineId } });
