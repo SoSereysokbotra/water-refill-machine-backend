@@ -17,6 +17,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private client!: mqtt.MqttClient;
   private readonly handlers = new Map<string, MqttMessageHandler[]>();
   private isConnected = false;
+  private pendingSubscriptions: Promise<void> = Promise.resolve();
 
   constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
@@ -134,12 +135,24 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private resubscribeAll(): void {
-    for (const topic of this.handlers.keys()) {
-      void this.subscribeTopic(topic).catch((err: unknown) => {
-        this.logger.error(`Resubscribe error for ${topic}: ${err instanceof Error ? err.message : String(err)}`);
-      });
+  async waitUntilReady(): Promise<void> {
+    for (let i = 0; i < 50; i++) {
+      if (this.isConnected) {
+        await this.pendingSubscriptions;
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
     }
+  }
+
+  private resubscribeAll(): Promise<void> {
+    const promises = Array.from(this.handlers.keys()).map((topic) =>
+      this.subscribeTopic(topic).catch((err: unknown) => {
+        this.logger.error(`Resubscribe error for ${topic}: ${err instanceof Error ? err.message : String(err)}`);
+      }),
+    );
+    this.pendingSubscriptions = Promise.all(promises).then(() => {});
+    return this.pendingSubscriptions;
   }
 
   private async dispatch(topic: string, payload: Buffer): Promise<void> {
