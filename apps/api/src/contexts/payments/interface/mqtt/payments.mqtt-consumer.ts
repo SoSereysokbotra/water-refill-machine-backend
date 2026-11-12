@@ -14,16 +14,14 @@ import { RateLimiterService } from '../../../../platform/rate-limit/rate-limiter
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
 import {
-  faultReportedEvent,
-  outcomeRejectedEvent,
-  payRequestRejectedEvent,
-} from '../../domain/payment.events';
-import {
   CancelPaymentCommand,
   CancelPaymentHandler,
   CreatePaymentCommand,
   CreatePaymentHandler,
+  faultReportedEvent,
+  outcomeRejectedEvent,
   PaymentRepository,
+  payRequestRejectedEvent,
   RecordDispenseCommand,
   RecordDispenseHandler,
 } from '../../application';

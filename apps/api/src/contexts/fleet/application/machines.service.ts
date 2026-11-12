@@ -9,6 +9,7 @@ import { Clock, ConflictError, Currency, NotFoundError, ValidationError } from '
 import { machineConfigChangedEvent, MachineConfigChangedData } from './fleet.events';
 import { buildMachineConfig, TierPrices, toTierPrices, VOLUME_TIERS } from './machine-config';
 import { FleetMachinePricingPort, MachinePricing } from './public/machine-pricing.port';
+import { FleetMonitoringPort, MachineStuckOutcomes } from './public/fleet-monitoring.port';
 
 /** Plan §C2: machineId = WRM-<3..6 digits> */
 export const MACHINE_ID_PATTERN = /^WRM-\d{3,6}$/;
@@ -46,7 +47,7 @@ type MachineRow = Prisma.MachineGetPayload<{ include: { prices: true } }>;
  * the handler sends the retained `config` message.
  */
 @Injectable()
-export class MachinesService implements FleetMachinePricingPort {
+export class MachinesService implements FleetMachinePricingPort, FleetMonitoringPort {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(UnitOfWork) private readonly uow: UnitOfWork,
@@ -242,6 +243,26 @@ function assertPrices(prices: TierPrices): void {
     if (!Number.isInteger(p) || p <= 0) {
       throw new ValidationError(`Price for ${v} mL must be a positive integer in minor units`);
     }
+  }
+
+  async getMachinesWithStuckOutcomes(olderThanMinutes: number): Promise<MachineStuckOutcomes[]> {
+    const cutoff = new Date(this.clock.now().getTime() - olderThanMinutes * 60 * 1000);
+    const rows = await this.prisma.machine.findMany({
+      where: {
+        pendingOutcomes: { gt: 0 },
+        pendingOutcomesSince: { lte: cutoff },
+      },
+      select: {
+        id: true,
+        pendingOutcomes: true,
+        pendingOutcomesSince: true,
+      },
+    });
+    return rows.map((r) => ({
+      machineId: r.id,
+      pendingOutcomes: r.pendingOutcomes,
+      pendingOutcomesSince: r.pendingOutcomesSince!,
+    }));
   }
 }
 

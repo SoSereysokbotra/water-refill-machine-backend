@@ -7,9 +7,13 @@ import { PaymentRepository } from '../../domain/ports/payment.repository';
 import { PaymentStatus, Currency } from '../../domain/payment.types';
 import { Dispense } from '../../domain/dispense.entity';
 import { RefundCase, RefundReason, RefundStatus } from '../../domain/refund-case.entity';
+import {
+  PaymentsRefundMonitoringPort,
+  StaleRefundCase,
+} from '../../application/public/refund-monitoring.port';
 
 @Injectable()
-export class PrismaPaymentRepository implements PaymentRepository {
+export class PrismaPaymentRepository implements PaymentRepository, PaymentsRefundMonitoringPort {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject('Clock') private readonly clock: Clock,
@@ -458,6 +462,28 @@ export class PrismaPaymentRepository implements PaymentRepository {
       select: { pendingOutcomes: true, lastSeenAt: true },
     });
     return { pendingOutcomes: machine?.pendingOutcomes ?? 0, lastSeenAt: machine?.lastSeenAt ?? null };
+  }
+
+  async getStaleRefundCases(olderThanMinutes: number): Promise<StaleRefundCase[]> {
+    const cutoff = new Date(this.clock.now().getTime() - olderThanMinutes * 60 * 1000);
+    const rows = await this.prisma.refundCase.findMany({
+      where: {
+        status: { in: ['open', 'claimed'] },
+        createdAt: { lte: cutoff },
+      },
+      select: {
+        tranId: true,
+        createdAt: true,
+        payment: {
+          select: { machineId: true },
+        },
+      },
+    });
+    return rows.map((r) => ({
+      tranId: r.tranId,
+      machineId: r.payment?.machineId ?? null,
+      createdAt: r.createdAt,
+    }));
   }
 
   private async recordEvents(payment: Payment, client: Prisma.TransactionClient | PrismaService): Promise<void> {
