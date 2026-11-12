@@ -170,17 +170,25 @@ Add a new note at the top at the end of every session.
 - Two-layer `MonitoringModule` in `apps/api/src/contexts/monitoring/`:
   - Pure alert rules (`monitoring.rules.ts`) with unit test coverage.
   - `AlertService` with dedupe key generation and 10-minute merge window.
-  - BullMQ `notify.telegram` queue with exponential backoff retries.
+  - BullMQ `notify.telegram` queue with exponential backoff retries and deterministic `jobId: ${alertId}__${action}` for at-least-once outbox idempotency.
   - Telegram client (`TELEGRAM_CLIENT`) that acts as a safe no-op if bot credentials are not set.
   - Repeatable `sweep.monitoring` sweep running every 60 s for stale cases (>24 h) and stuck pending outcomes (>1 h).
   - Admin REST controller (`GET /v1/alerts`, `POST /v1/alerts/:id/ack`, `POST /v1/alerts/:id/resolve`) guarded by `AdminKeyGuard`.
+- Review fixes & stability hardening:
+  - Fixed Telegram duplicate notification bug: deterministic `jobId` in `TelegramNotifierService.enqueue` ensures duplicate outbox event redeliveries result in exactly 1 Telegram message.
+  - Fixed acceptance test flakiness: eliminated duplicate BullMQ enqueue in test wrapper (deterministc `processJob` call). Added Scenarios 11 & 12 verifying job and event idempotency.
+  - Fixed full test suite regression: `MqttService.onModuleDestroy` and `QueueService.onModuleDestroy` now enforce timeout races with forced close, preventing 60 s `afterAll` hook timeouts on app teardown.
+  - Fixed MQTT subscription bug: only topics with wildcards (`+`, `#`) are prefixed with `$share/<group>/`; single topics subscribe directly. Added health check wait in `payment-flow.e2e.spec.ts`.
+  - Scoped acceptance test cleanup: `clean()` and `dispatchOutbox()` strictly target `WRM-9501` and test alert IDs (`alt-test-*`), preventing shared DB truncation.
+  - Updated `scripts/verify-phase5.sh`: added `set -euo pipefail`, `db:deploy`, and full test suite execution (`pnpm --filter @wrm/api test`).
 - Test suites:
   - 25 unit tests in `apps/api/test/monitoring-rules.spec.ts` (100% passed).
-  - 10 acceptance scenarios in `apps/api/test/phase5-acceptance.e2e.spec.ts` (100% passed).
+  - 12 acceptance scenarios in `apps/api/test/phase5-acceptance.e2e.spec.ts` (100% passed).
+  - Full test suite: 28 test files, 163 tests passing (100% passed).
 - Architecture & verification:
   - 0 boundary violations in `pnpm --filter @wrm/api depcruise`.
   - Typecheck passed cleanly across all monorepo packages.
-  - Verification script `scripts/verify-phase5.sh`.
+  - Verification script `scripts/verify-phase5.sh` passing.
   - Guide created in `readmePhase5.md`.
 
 **Out of scope** (recorded per Plan E Phase 5)

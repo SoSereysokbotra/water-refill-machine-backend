@@ -104,3 +104,4 @@ pnpm --filter @wrm/api exec vitest run test/monitoring-rules.spec.ts test/phase5
      ```
      [RESOLVED] MACHINE_OFFLINE on WRM-001: Machine WRM-001 is back online
      ```
+
