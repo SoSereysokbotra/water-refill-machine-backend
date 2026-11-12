@@ -1,0 +1,88 @@
+Task,Area,Priority
+"[BE-P0] Monorepo Restructure & Path Migration","Backend, Firmware",High
+"[BE-P0] Workspace Setup (pnpm, Turborepo, contracts)","Backend",High
+"[BE-P0] Scaffold API Application (NestJS 11 + Fastify)","Backend",High
+"[BE-P0] Tooling & Boundary Enforcement (ESLint, depcruise)","Backend",High
+"[BE-P0] Test Setup (Vitest, SWC, Testcontainers)","Backend",High
+"[BE-P0] Local Infrastructure Compose (Postgres, Redis, Mosquitto)","Backend",High
+"[BE-P0] CI Pipeline (GitHub Actions ci.yml)","Backend",High
+"[BE-P0] Architecture Decision Records (ADRs 0001–0008, 0011)","Backend",High
+"[BE-P0] Partner Coordination (ABA & STM32 Specs)","Backend, PM",High
+"[BE-P1] Configuration Module (Zod validation & RUN_MODE)","Backend",High
+"[BE-P1] Structured Logging (nestjs-pino & Redaction)","Backend",High
+"[BE-P1] Error Taxonomy & Global Exception Filter","Backend",High
+"[BE-P1] Shared Kernel Primitives (AggregateRoot, Money, TranId)","Backend",High
+"[BE-P1] Database & UnitOfWork (Prisma, retry, conflict mapping)","Backend",High
+"[BE-P1] Transactional Outbox Platform (Relay, Registry, DLQ)","Backend",High
+"[BE-P1] Idempotent Inbox Service (InboxService.record in tx)","Backend",High
+"[BE-P1] Sweeps Scheduling Framework (BullMQ repeatable jobs)","Backend",High
+"[BE-P1] MQTT Client Platform (TLS, Reconnect, Expiry, @MqttSubscribe)","Backend",High
+"[BE-P1] Queue Service (BullMQ Module, DLQ, retention)","Backend",High
+"[BE-P1] Distributed Rate Limiter (Redis rate-limiter-flexible)","Backend",High
+"[BE-P1] Health Checks & Telemetry Init (/health, OTel, Sentry)","Backend",Medium
+"[BE-P2] Payment & Dispense Contracts (Zod schemas)","Backend",High
+"[BE-P2] Payment Aggregate & Domain Logic (State machine & events)","Backend",High
+"[BE-P2] Payment Application Commands & Sweeps (pay, cancel, reconcile)","Backend",High
+"[BE-P2] Prisma Payment Repositories & Concurrency Guards","Backend",High
+"[BE-P2] ABA PayWay Gateway Integration (Per-op mapping D7 & mock)","Backend",High
+"[BE-P2] Payment MQTT Consumers & Handlers (pay/request, cancel, qr)","Backend",High
+"[BE-P2] PayWay Webhook Callback & Confirm Job Handler","Backend",High
+"[BE-P2] Minimal Dispense Outcome Recording (transaction consumer)","Backend",High
+"[BE-P2] Database Migrations & Initial Machine/Price Seed","Backend",High
+"[BE-P2] ESP32 Firmware v0.3 Update (request_id, retry, local cancel)","Backend, Firmware",High
+"[BE-P2] Backend Cut-Over & Prototype Retirement","Backend",High
+"[BE-P3] Dispense Domain & Volume/Weight Accuracy Check","Backend",High
+"[BE-P3] Dispense Escalation & Reconciliation Sweeps (sweep.dispensing)","Backend",High
+"[BE-P3] Refund Case Management & Atomic Claiming","Backend",High
+"[BE-P3] Machine-Blocked Refund Guard (REFUND_BLOCKED_PENDING_OUTCOMES)","Backend",High
+"[BE-P3] Rejection Handling & Dispense Ack Rules (dispense_rejections)","Backend",High
+"[BE-P3] Auto-Refund Executor (Behind REFUND_MODE=auto)","Backend",Medium
+"[BE-P3] ESP32 Firmware v0.4 NVS Outcome Queue (capacity 64, 7-day)","Backend, Firmware",High
+"[BE-P3] STM32 Integration & Golden Fixture Validation","Backend, Hardware",High
+"[BE-P3.5] Pilot Production Infrastructure Setup (VPS, Postgres, Caddy)","Backend",High
+"[BE-P3.5] Production Merchant & Static IP Whitelisting (ABA)","Backend, PM",High
+"[BE-P3.5] Pilot Machine Provisioning (WRM-001 at pilot site)","Backend, Hardware",High
+"[BE-P3.5] Pilot Operations & Daily Log (Daily reviews & audits)","Backend",Medium
+"[BE-P4] Fleet Service & Machine Provisioning API (/v1/machines)","Backend",High
+"[BE-P4] Machine Pricing Management (300ml, 500ml, 1000ml fixed tiers)","Backend",High
+"[BE-P4] Heartbeat & Presence Consumer (MachinePresenceService)","Backend",High
+"[BE-P4] Remote Configuration Delivery & Ack (Retained config topic)","Backend",High
+"[BE-P4] Offline Detection Sweep (sweep.fleet-offline within 3 min)","Backend",High
+"[BE-P4] ESP32 Firmware v0.5 Fleet Sync (CFG/PONG/Heartbeat)","Backend, Firmware",High
+"[BE-P4] Heartbeat Telemetry Retention Policy (30-day cleanup)","Backend",Low
+"[BE-P5] Alert Domain & Lifecycle Service (Dedupe & 10m merge)","Backend",High
+"[BE-P5] Alert Rules Implementation (Offline, dispense, refund, faults)","Backend",High
+"[BE-P5] Hardware Fault Code Mapping & Severities (Plan C8)","Backend",High
+"[BE-P5] Telegram Notifier Queue & Worker (notify.telegram)","Backend",High
+"[BE-P5] Monitoring Sweep (sweep.monitoring for stale cases/pending)","Backend",High
+"[BE-P5] Alerts REST API (GET /v1/alerts, ack, resolve with Admin key)","Backend",Medium
+"[BE-P6] Authentication Spike & Framework Setup (Argon2id/sessions)","Backend",High
+"[BE-P6] Role-Based Access Control (RBAC: admin, operator, viewer)","Backend",High
+"[BE-P6] User Management & Multi-Factor Auth (TOTP for admin)","Backend",Medium
+"[BE-P6] Security Audit Logging (Immutable audit trail)","Backend",High
+"[BE-P6] Login Brute-Force & IP Rate Limiting","Backend",High
+"[BE-P7] Sales & Machine Reporting Views (Materialized TypedSQL)","Backend",High
+"[BE-P7] Paginated Reporting Endpoints (Sales, revenue, CSV export)","Backend",Medium
+"[BE-P7] Next.js Operator Dashboard (Overview, fleet management)","Backend",High
+"[BE-P7] Dashboard Refund Queue UI (Claim, refund, reject, reopen)","Backend",High
+"[BE-P7] Alerts & Unknown Dispenses Dashboard UI","Backend",Medium
+"[BE-P8] OpenTelemetry Distributed Tracing (Trace ID through outbox)","Backend",High
+"[BE-P8] Application Metrics Collection (/metrics, payments, queues)","Backend",High
+"[BE-P8] Grafana Operational Dashboards (Payments, Fleet, Dispense)","Backend",Medium
+"[BE-P8] Sentry Error Tracking & Release Tagging","Backend",Medium
+"[BE-P9] Multi-Stage Production Dockerfiles (API, worker, dashboard)","Backend",High
+"[BE-P9] Production Docker Compose Topology (Caddy, 2x API, worker)","Backend",High
+"[BE-P9] Staging Environment Deployment & Verification","Backend",High
+"[BE-P9] Automated CI/CD Release Pipeline (GitHub Actions deploy.yml)","Backend",High
+"[BE-P9] Database Backup & Disaster Recovery Drill (Encrypted offsite)","Backend",High
+"[BE-P9] Infrastructure Hardening & MQTT Security (ACLs & certs)","Backend",High
+"[BE-P10] Load Testing (k6 API benchmarks & emqtt-bench 1k machines)","Backend",High
+"[BE-P10] Chaos Engineering & Fault Injection (Process kill, Redis flush)","Backend",High
+"[BE-P10] Security Audit & Penetration Testing (RBAC, container scans)","Backend",High
+"[BE-P10] Legacy Protocol Deprecation (Remove legacy MQTT formats)","Backend",Low
+"[BE-P10] Production Go-Live Readiness Review & Pilot Sign-off","Backend, PM",High
+"[BE-P11] OTA Contracts & Firmware Registry (Cloudflare R2, SHA-256)","Backend",High
+"[BE-P11] Staged Rollout & Canary Controller (Canary -> 10% -> 100%)","Backend",High
+"[BE-P11] ESP32 Dual-Partition OTA Execution (Safe boot rollback)","Backend, Firmware",High
+"[BE-P11] STM32 Remote Flashing via ESP32 Gateway (UART bootloader)","Backend, Firmware, Hardware",High
+

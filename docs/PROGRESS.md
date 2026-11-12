@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 4: Fleet ✅** (hardware-checked 2026-11-12). Phase 3 still needs its STM32-reboot + 2 h offline check |
-| **Next action** | Merge `feat/phase-4-fleet`; then Phase 5 (Monitoring) and the Phase 3.5 pilot setup; Phase 3 remaining checks when the STM32 is available |
-| **Last updated** | 2026-11-12 (hardware tests) by Claude with backend developer |
-| **Last commit** | branch `feat/phase-4-fleet` (not merged yet) |
+| **Current phase** | **Phase 5: Monitoring 🟦** (code & automated tests complete; awaiting manual unplug check). Phase 3 still needs its STM32-reboot + 2 h offline check |
+| **Next action** | Run `readmePhase5.md` §4 unplug-ESP32 Telegram check; merge `feat/phase-5-monitoring`; then Phase 6 (Identity) or Phase 3.5 pilot setup |
+| **Last updated** | 2026-11-12 by Claude for backend developer |
+| **Last commit** | branch `feat/phase-5-monitoring` |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -34,7 +34,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 | 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
 | 3.5 | Early pilot | ⬜ | | | | |
 | 4 | Fleet | ✅ | Claude (for backend developer) | 2026-11-12 | 2026-11-12 | `feat/phase-4-fleet` |
-| 5 | Monitoring | ⬜ | | | | |
+| 5 | Monitoring | 🟦 | Claude (for backend developer) | 2026-11-12 | | `feat/phase-5-monitoring` |
 | 6 | Identity | ⬜ | | | | |
 | 7 | Reporting & dashboard | ⬜ | | | | |
 | 8 | Observability | ⬜ | | | | |
@@ -49,6 +49,11 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 ## 3. Definition of Done: current phase
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
+
+### Phase 5: Monitoring (code & automated tests complete)
+- [x] One alert per incident for every rule
+- [ ] `[MANUAL CHECK]` Critical alerts reach Telegram (unplug-ESP32 test, see `readmePhase5.md` §4)
+- [x] `PROGRESS.md` updated with handoff note
 
 ### Phase 4: Fleet (done)
 - [x] New machine provisioned via API and online without manual DB edits (EMQX user = documented manual step, see `readmePhase4.md`)
@@ -151,6 +156,40 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-12: Phase 5 Monitoring (automated complete, awaiting manual unplug check) by Claude for backend developer
+
+**Done this session** (branch `feat/phase-5-monitoring`)
+- Added `Alert` model to Prisma schema with fields for deduplication, severity, machine association, status, counts, and merge tracking. Added migration `20261112134717_phase5_monitoring_alerts`.
+- Added `machines.pending_outcomes_since` timestamp tracking on heartbeat (set on 0 → >0, cleared when 0).
+- Fault severities mapping in `@wrm/contracts` (`packages/contracts/src/faults.ts`) per Plan C8.
+- Producer events in Fleet & Payments: `dispensing.OutcomeRejected` (persisted in `dispense_rejections`), `dispensing.SiteCheckNeeded` (raised once when machine not seen since payment), `dispensing.FaultReported` (`wrm/+/error` without `tran_id`), `fleet.MachineFaultReported` (when `stm32.fault` changes from `NONE`), and `payments.PayRequestRejected` (repeated `PAY_MACHINE_BUSY` or `RATE_LIMITED`).
+- Public cross-context ports: `FLEET_MONITORING` (`getMachinesWithStuckOutcomes`) in Fleet and `PAYMENTS_REFUND_MONITORING` (`getStaleRefundCases`) in Payments.
+- Two-layer `MonitoringModule` in `apps/api/src/contexts/monitoring/`:
+  - Pure alert rules (`monitoring.rules.ts`) with unit test coverage.
+  - `AlertService` with dedupe key generation and 10-minute merge window.
+  - BullMQ `notify.telegram` queue with exponential backoff retries.
+  - Telegram client (`TELEGRAM_CLIENT`) that acts as a safe no-op if bot credentials are not set.
+  - Repeatable `sweep.monitoring` sweep running every 60 s for stale cases (>24 h) and stuck pending outcomes (>1 h).
+  - Admin REST controller (`GET /v1/alerts`, `POST /v1/alerts/:id/ack`, `POST /v1/alerts/:id/resolve`) guarded by `AdminKeyGuard`.
+- Test suites:
+  - 25 unit tests in `apps/api/test/monitoring-rules.spec.ts` (100% passed).
+  - 10 acceptance scenarios in `apps/api/test/phase5-acceptance.e2e.spec.ts` (100% passed).
+- Architecture & verification:
+  - 0 boundary violations in `pnpm --filter @wrm/api depcruise`.
+  - Typecheck passed cleanly across all monorepo packages.
+  - Verification script `scripts/verify-phase5.sh`.
+  - Guide created in `readmePhase5.md`.
+
+**Out of scope** (recorded per Plan E Phase 5)
+- "ABA circuit open" (no circuit breaker exists yet).
+- "auto-refund failure" (`REFUND_MODE=auto` has no executor yet).
+
+**How to run / test**
+- Automated tests: `bash scripts/verify-phase5.sh` (or `pnpm --filter @wrm/api exec vitest run test/monitoring-rules.spec.ts test/phase5-acceptance.e2e.spec.ts`)
+- Manual check: See `readmePhase5.md` §4 (unplug ESP32 power, observe Telegram alert, plug in, observe resolve).
 
 ---
 
