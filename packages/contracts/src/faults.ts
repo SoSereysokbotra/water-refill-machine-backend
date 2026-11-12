@@ -18,3 +18,25 @@ export const FAULT_CODES = {
 } as const;
 
 export type FaultCode = (typeof FAULT_CODES)[keyof typeof FAULT_CODES];
+
+export type FaultSeverity = 'info' | 'warning' | 'critical';
+
+export const FAULT_SEVERITY: Record<FaultCode, FaultSeverity | null> = {
+  NONE: null,
+  TANK_EMPTY: 'critical',
+  TANK_LOW: 'warning',
+  NO_FLOW: 'critical',
+  OVERFLOW: 'critical',
+  BOTTLE_REMOVED: 'warning',
+  BOTTLE_TIMEOUT: 'info',
+  DISPENSE_TIMEOUT: 'critical',
+  LOADCELL_FAULT: 'critical',
+  FLOW_SENSOR_FAULT: 'critical',
+  VALVE_FAULT: 'critical',
+  PUMP_FAULT: 'critical',
+  PAID_NOT_ACCEPTED: 'warning',
+  POWER_LOSS_RECOVERY: 'warning',
+  CFG_INVALID: 'warning',
+  UNKNOWN: 'warning',
+} as const;
+
