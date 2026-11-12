@@ -31,6 +31,12 @@ describe('Phase 1 Platform E2E Smoke & Event Pipeline', () => {
     registry = app.get(OutboxHandlerRegistry);
     relay = app.get(OutboxRelay);
     mqttService = app.get(MqttService);
+
+    // Wait for MQTT client to connect
+    for (let i = 0; i < 30; i++) {
+      if (mqttService.isHealthy()) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
   }, 30000);
 
   afterAll(async () => {
