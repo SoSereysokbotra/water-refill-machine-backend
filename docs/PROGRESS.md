@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 3: Dispensing & refund review** (automated done, awaiting manual hardware check) |
-| **Next action** | Merge branch `fix/phase-3-review`, then flash ESP32 **v0.4.1** and run the Phase 2 + 3 manual checks (see handoff note 2026-11-12) before Phase 3.5 |
-| **Last updated** | 2026-11-12 by review (Claude) |
-| **Last commit** | branch `fix/phase-3-review` (not merged yet) |
+| **Current phase** | **Phase 4: Fleet** (automated done, awaiting manual hardware check). Phases 2 + 3 also still await their hardware checks |
+| **Next action** | Merge `feat/phase-4-fleet`; flash ESP32 **v0.5.0**; run the hardware checks of Phases 2, 3 and 4 (section 4); then Phase 5 (Monitoring) and the Phase 3.5 pilot setup |
+| **Last updated** | 2026-11-13 by Claude |
+| **Last commit** | branch `feat/phase-4-fleet` (not merged yet) |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -33,7 +33,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 | 2 | Payments | 🟦 | Backend developer | 2026-11-10 | | `phase2` |
 | 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
 | 3.5 | Early pilot | ⬜ | | | | |
-| 4 | Fleet | ⬜ | | | | |
+| 4 | Fleet | 🟦 | Claude (for backend developer) | 2026-11-12 | | `feat/phase-4-fleet` |
 | 5 | Monitoring | ⬜ | | | | |
 | 6 | Identity | ⬜ | | | | |
 | 7 | Reporting & dashboard | ⬜ | | | | |
@@ -49,6 +49,11 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 ## 3. Definition of Done: current phase
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
+
+### Phase 4: Fleet (awaiting manual hardware check)
+- [x] New machine provisioned via API and online without manual DB edits (EMQX user = documented manual step, see `readmePhase4.md`)
+- [ ] `[MANUAL CHECK]` Offline within 3 min of power loss; price change confirmed by `CFG,OK` (`readmePhase4.md` §3.2–3.3)
+- [x] `PROGRESS.md` updated with handoff note
 
 ### Phase 3: Dispensing & refund review
 - [x] Every PAID payment ends in DISPENSED, REFUNDED or REFUND_REJECTED — none refunded while outcome unknown
@@ -98,7 +103,10 @@ Things an AI agent can't do. A person does them, then ticks the box.
 | Move your real `secrets.h` from the old `esp32-gateway/include/` to `firmware/esp32-gateway/include/` (git-ignored; Phase 0 moved the folder but not this file) | 3 | Backend developer | ⬜ |
 | Existing local dev databases (created with `db push`): run `pnpm --filter @wrm/api exec prisma migrate resolve --applied 20261111000000_init`, then `pnpm --filter @wrm/api db:deploy` | 3 | Each developer | ⬜ |
 | Before the pilot: generate `ADMIN_API_KEY` (≥ 32 chars) for staging/production `.env` and keep it private | 3.5 | Backend developer | ⬜ |
-| Confirm the first GitHub Actions run of the new CI workflow is green (could not be run from the review machine) | 3 | Backend developer | ⬜ |
+| Confirm the first GitHub Actions run of the new CI workflow is green (could not be run from the review machine) | 3 | Backend developer | ✅ |
+| Flash ESP32 **v0.5.0**, then run Phase 4 checks: price change → `CFG,OK`; offline within 3 min of power loss (`readmePhase4.md` §3) | 4 | Backend developer | ⬜ |
+| For every machine provisioned with `POST /v1/machines`: add its MQTT user in the EMQX console with the one-time password (and delete it on decommission) | 4 | Backend developer | ⬜ |
+| Hardware developer: STM32 handles `CFG,<p500>,<p750>,<p1000>,<currency>,<enabled>` (major units), answers `CFG,OK` / `CFG,ERR,<fault>`, keeps prices in flash | 4 | Hardware developer | ⬜ |
 
 ---
 
@@ -142,6 +150,43 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-13: Phase 4 Fleet (automated complete, awaiting hardware check) by Claude
+
+**Done this session** (branch `feat/phase-4-fleet`)
+- Fleet machine API `/v1/machines`: provision (currency + 3 prices required; MQTT username `wrm-NNN` + one-time password shown once), list, get, PATCH (name/location/enabled), PUT prices, rotate-credentials, decommission (`machines.decommissioned_at`, cannot be re-enabled).
+- `fleet.MachineConfigChanged` → retained `config` (prices in major units, built from the DB at publish time); `config/ack` error → `fleet.ConfigRejected`.
+- Presence: `MachineCameOnline` / `MachineWentOffline`, Last Will, `sweep.fleet-offline` (30 s, offline after 180 s).
+- Payments prices payments through the Fleet public port (`FLEET_MACHINE_PRICING`); the temporary Prisma machine adapter is removed.
+- ESP32 firmware **v0.5.0**: `config` → `CFG` (retry 5 s ×12) → `config/ack`; resend when the UART link returns.
+- Docs: `readmePhase4.md`, plan v3.3, review note at the top of `readmePhase3.md`.
+
+**Not finished / next steps** (in order)
+1. Merge `feat/phase-4-fleet`.
+2. People: section 4 (flash v0.5.0, hardware checks for Phases 2–4, EMQX users).
+3. Phase 5 (Monitoring) — can start before the hardware checks if the team agrees, like Phase 4 did.
+
+**Changed from the plan** (plan updated to v3.3)
+- EMQX users are created/rotated manually (Serverless management API not confirmed); the "old password rejected" E2E test is not possible without it.
+- Provisioning requires prices (plan said "default prices").
+- After 12 unanswered `CFG` lines the ESP32 reports `config/ack error UNKNOWN`.
+- STM32 "reboot" is detected only as UART link lost (≥ 15 s) and back; C3 has no reboot signal.
+
+**Known issues / bugs**
+- Once, `refund-flow.e2e` failed in its `beforeAll` during a full run (app start > 30 s while the laptop was shutting down). Not reproduced in 3 later full runs. If it happens again, raise the hook timeout or look at app start time.
+- Phase 2 + 3 hardware checks still open (unchanged).
+- Metrics for unknown-machine heartbeats come with Observability (Phase 8); price-change audit log with Identity (Phase 6).
+
+**How to run / test**
+- `pnpm --filter @wrm/api db:deploy` (new migration `20261112000000_add_machine_decommissioned_at`).
+- `pnpm --filter @wrm/api test` → 26 files / 126 tests.
+- `pio run -d firmware/esp32-gateway` → v0.5.0 builds (73 % flash).
+- Manual: `readmePhase4.md` §3.
+
+**Needs from a person**
+- See section 4.
 
 ---
 
