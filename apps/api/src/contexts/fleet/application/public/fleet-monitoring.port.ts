@@ -9,3 +9,4 @@ export interface MachineStuckOutcomes {
 export interface FleetMonitoringPort {
   getMachinesWithStuckOutcomes(olderThanMinutes: number): Promise<MachineStuckOutcomes[]>;
 }
+

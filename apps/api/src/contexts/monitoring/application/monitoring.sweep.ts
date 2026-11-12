@@ -31,14 +31,14 @@ export class MonitoringSweep extends BaseSweep<MonitoringSweepItem> {
     // 1. Stale refund cases (open/claimed > 24h = 1440 min)
     const staleCases = await this.refundMonitoring.getStaleRefundCases(24 * 60);
     for (const c of staleCases) {
-      items.push({ kind: 'stale_refund', data: c });
+      items.push({ kind: 'stale_refund', data: c as unknown as Record<string, unknown> });
     }
 
     // 2. Machines with pending outcomes stuck for >= 1h (60 min)
     const stuckMachines = await this.fleetMonitoring.getMachinesWithStuckOutcomes(60);
     const stuckMachineIds = new Set(stuckMachines.map((m) => m.machineId));
     for (const m of stuckMachines) {
-      items.push({ kind: 'stuck_outcomes', data: m });
+      items.push({ kind: 'stuck_outcomes', data: m as unknown as Record<string, unknown> });
     }
 
     // 3. Check existing active PENDING_OUTCOMES_STUCK alerts for auto-resolve (when pending_outcomes = 0)

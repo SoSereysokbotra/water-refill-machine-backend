@@ -45,3 +45,4 @@ export class AlertsController {
     return this.alertService.resolveAlertById(id, parsed.actorId);
   }
 }
+

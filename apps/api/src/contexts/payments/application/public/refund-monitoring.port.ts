@@ -9,3 +9,4 @@ export interface StaleRefundCase {
 export interface PaymentsRefundMonitoringPort {
   getStaleRefundCases(olderThanMinutes: number): Promise<StaleRefundCase[]>;
 }
+

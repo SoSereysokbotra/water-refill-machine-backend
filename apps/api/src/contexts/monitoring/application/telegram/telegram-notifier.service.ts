@@ -61,3 +61,4 @@ export class TelegramNotifierService implements OnModuleInit {
     return `[ALERT ${job.severity.toUpperCase()}] ${job.type}${target}: ${job.message}${countInfo}`;
   }
 }
+

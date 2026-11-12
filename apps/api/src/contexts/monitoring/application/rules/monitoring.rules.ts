@@ -237,3 +237,4 @@ export function rulePayRequestRejected(data: { machineId: string; code: string; 
     },
   };
 }
+

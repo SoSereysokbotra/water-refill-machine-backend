@@ -31,7 +31,7 @@ export class FleetModule implements OnModuleInit {
   constructor(
     @Inject(SweepsScheduler) private readonly scheduler: SweepsScheduler,
     @Inject(FleetOfflineSweep) private readonly offlineSweep: FleetOfflineSweep,
-  ) {}
+  ) { }
 
   onModuleInit(): void {
     this.scheduler.registerSchedule({
