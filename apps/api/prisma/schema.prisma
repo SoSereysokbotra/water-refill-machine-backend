@@ -70,14 +70,16 @@ model Machine {
   lastSeenAt      DateTime?      @map("last_seen_at")
   online          Boolean        @default(false)
   lastStm32State  String?        @map("last_stm32_state")
-  pendingOutcomes Int            @default(0) @map("pending_outcomes")
-  decommissionedAt DateTime?     @map("decommissioned_at") // retired: never enabled again (Phase 4)
-  version         Int            @default(0)
-  createdAt       DateTime       @default(now()) @map("created_at")
-  updatedAt       DateTime       @updatedAt @map("updated_at")
+  pendingOutcomes      Int            @default(0) @map("pending_outcomes")
+  pendingOutcomesSince DateTime?      @map("pending_outcomes_since")
+  decommissionedAt     DateTime?      @map("decommissioned_at") // retired: never enabled again (Phase 4)
+  version              Int            @default(0)
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
 
   prices   MachinePrice[]
   payments Payment[]
+  alerts   Alert[]
 
   @@map("machines")
 }
@@ -234,4 +236,28 @@ model Heartbeat {
   @@index([machineId, at], map: "heartbeats_machine_id_at_idx")
   @@index([at], map: "heartbeats_at_idx")
   @@map("heartbeats")
+}
+
+model Alert {
+  id             String        @id @default(uuid())
+  machineId      String?       @map("machine_id")
+  type           String
+  severity       AlertSeverity
+  message        String
+  status         AlertStatus   @default(active)
+  resolvedBy     String?       @map("resolved_by")
+  resolvedAt     DateTime?     @map("resolved_at")
+  acknowledgedBy String?       @map("acknowledged_by")
+  acknowledgedAt DateTime?     @map("acknowledged_at")
+  dedupeKey      String        @map("dedupe_key")
+  count          Int           @default(1)
+  lastSeenAt     DateTime      @default(now()) @map("last_seen_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  machine Machine? @relation(fields: [machineId], references: [id], onDelete: SetNull)
+
+  @@index([status, dedupeKey])
+  @@index([machineId, createdAt])
+  @@map("alerts")
 }
