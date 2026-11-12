@@ -1,4 +1,4 @@
-// ESP32 gateway for the Water Refill Machine (v0.5.0).
+// ESP32 gateway for the Water Refill Machine (v0.5.1).
 //
 //   STM32 (machine control)  <--UART2-->  ESP32 (this)  <--MQTT/TLS-->  EMQX Cloud  <-->  Backend
 //
@@ -42,7 +42,7 @@
 #include "secrets.h"
 #include "ca_cert.h"
 
-#define FW_VERSION          "0.5.0"
+#define FW_VERSION          "0.5.1"
 #define STM32_RX_PIN        16      // ESP32 RX2  <- STM32 TX
 #define STM32_TX_PIN        17      // ESP32 TX2  -> STM32 RX
 #define STM32_BAUD          115200
@@ -103,6 +103,7 @@ String stm32State, stm32Tran, stm32Tank, stm32Fault;
 #define CFG_MAX_TRIES       12
 String cfgLine;                     // last CFG line built from the retained config ("" = none yet)
 bool cfgPending = false;            // waiting for CFG,OK / CFG,ERR
+bool cfgApplied = false;            // true only after CFG,OK for cfgLine
 int cfgTries = 0;
 unsigned long lastCfgSend = 0;
 
@@ -502,11 +503,14 @@ void onMqttMessage(char *t, byte *payload, unsigned int len) {
       return;
     }
     String line = String("CFG,") + p500 + "," + p750 + "," + p1000 + "," + cur + "," + (doc["enabled"].as<bool>() ? "1" : "0");
-    if (line == cfgLine && !cfgPending) {
-      Serial.println("  [mqtt] config unchanged (already applied)");
+    // Skip only if this exact config was confirmed (CFG,OK) or is being delivered right now.
+    // After a failure (CFG,ERR / 12 tries) the same config is delivered again.
+    if (line == cfgLine && (cfgApplied || cfgPending)) {
+      Serial.println(cfgApplied ? "  [mqtt] config unchanged (already applied)" : "  [mqtt] config already being delivered");
       return;
     }
     cfgLine = line;
+    cfgApplied = false;
     printBanner("CONFIG", cfgLine);
     startCfgDelivery();
   }
@@ -645,6 +649,7 @@ void handleLine(String line, bool fromUsb) {
       Serial.println("  CFG reply ignored (no config waiting)");
     } else if (rest == "OK") {
       cfgPending = false;
+      cfgApplied = true;
       publishConfigAck(true, "");
     } else if (rest.startsWith("ERR")) {
       cfgPending = false;
