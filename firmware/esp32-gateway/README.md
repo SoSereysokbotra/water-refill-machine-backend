@@ -134,6 +134,10 @@ Full contract: [Implementation Plan §C3](../../docs/04-Cloud-and-Payment/backen
 | `wrm/<MACHINE_ID>/error` | ESP32 → backend |
 | `wrm/<MACHINE_ID>/heartbeat` | ESP32 → backend (every 60 s) |
 | `wrm/<MACHINE_ID>/online` | `1` on connect, `0` via Last Will (retained) |
+| `wrm/<MACHINE_ID>/pay/cancel` | ESP32 → backend |
+| `wrm/<MACHINE_ID>/transaction/ack` | backend → ESP32 |
+| `wrm/<MACHINE_ID>/config` | backend → ESP32 (retained) |
+| `wrm/<MACHINE_ID>/config/ack` | ESP32 → backend |
 
 ## 6. Troubleshooting
 
