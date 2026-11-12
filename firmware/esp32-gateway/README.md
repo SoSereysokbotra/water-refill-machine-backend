@@ -1,10 +1,16 @@
-# ESP32 Gateway (WROOM-32) — Firmware v0.4.1
+# ESP32 Gateway (WROOM-32) — Firmware v0.5.0
 
 Connects the machine to the cloud. The ESP32 talks **MQTT (TLS)** to the EMQX Cloud broker and **UART** to the STM32. It never drives the pump or sensors — that is the STM32's job.
 
 ```text
 STM32 (control)  <--UART2 (GPIO16/17)-->  ESP32 (this)  <--MQTT/TLS 8883-->  EMQX Cloud  <-->  Backend
 ```
+
+### v0.5.0 (Phase 4: machine config)
+- Subscribes to the **retained** `wrm/<id>/config` (prices, currency, enabled) and sends it to the STM32 as `CFG,<price_500>,<price_750>,<price_1000>,<currency>,<enabled 0|1>`. Prices are **major units** (`0.15`, `500`), like the QR amount.
+- Retries the `CFG` line every 5 s until the STM32 answers `CFG,OK` → `config/ack ok`, or `CFG,ERR,<fault>` → `config/ack error <fault>`. After 12 tries without an answer → `config/ack error UNKNOWN` (the backend raises `fleet.ConfigRejected`).
+- Re-sends the last config when the UART link comes back after being lost (≥ 15 s without `PONG`). A shorter STM32 restart is not detected — the STM32 should keep its last prices in flash.
+- Test without the STM32: after `CONFIG` appears in the monitor, type `cfg,ok` (or `cfg,err,CFG_INVALID`).
 
 ### v0.4.1 Fixes (Phase 3 review)
 - **STM32 lines keep their case.** v0.4.0 and earlier upper-cased every UART line, so a real `DONE,<tran_id>` (lowercase id) was rejected by the backend. Only the USB test-menu shortcuts are case-insensitive now.
@@ -110,6 +116,8 @@ Full contract: [Implementation Plan §C3](../../docs/04-Cloud-and-Payment/backen
 | `PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault>` | STM32 → ESP32 | Stopped early |
 | `ERR,<fault>[,<tran_id>]` | STM32 → ESP32 | Fault. With `tran_id` = dispense outcome `error`; without = fault report only |
 | `ACK,<tran_id>` | ESP32 → STM32 | Outcome saved in NVS — the STM32 may forget it |
+| `CFG,<price_500>,<price_750>,<price_1000>,<currency>,<enabled 0\|1>` | ESP32 → STM32 | Prices (major units) and enabled flag; repeated every 5 s until answered |
+| `CFG,OK` / `CFG,ERR,<fault>` | STM32 → ESP32 | Config applied / rejected |
 | `NET,OK` / `NET,DOWN` | ESP32 → STM32 | Network status (show "Offline" when down) |
 | `PING` → `PONG,<state>,<tran_id\|0>,<tank>,<fault>` | both | Link check every 5 s (plain `PONG` also accepted) |
 
