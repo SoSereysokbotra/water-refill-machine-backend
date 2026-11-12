@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 3: Dispensing & refund review** (automated done, awaiting manual hardware check) |
-| **Next action** | Merge branch `fix/phase-3-review`, then flash ESP32 **v0.4.1** and run the Phase 2 + 3 manual checks (see handoff note 2026-11-12) before Phase 3.5 |
-| **Last updated** | 2026-11-12 by review (Claude) |
-| **Last commit** | branch `fix/phase-3-review` (not merged yet) |
+| **Current phase** | **Phase 4: Fleet ✅** (hardware-checked 2026-11-12). Phase 3 still needs its STM32-reboot + 2 h offline check |
+| **Next action** | Merge `feat/phase-4-fleet`; then Phase 5 (Monitoring) and the Phase 3.5 pilot setup; Phase 3 remaining checks when the STM32 is available |
+| **Last updated** | 2026-11-12 (hardware tests) by Claude with backend developer |
+| **Last commit** | branch `feat/phase-4-fleet` (not merged yet) |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -30,10 +30,10 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 |---|---|---|---|---|---|---|
 | 0 | Foundations | ✅ | Backend developer | 2026-11-08 | 2026-11-09 | `c3c6c54` |
 | 1 | Platform | ✅ | Backend developer | 2026-11-09 | 2026-11-09 | `phase1` |
-| 2 | Payments | 🟦 | Backend developer | 2026-11-10 | | `phase2` |
+| 2 | Payments | ✅ | Backend developer | 2026-11-10 | 2026-11-12 | `48069dd` |
 | 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
 | 3.5 | Early pilot | ⬜ | | | | |
-| 4 | Fleet | ⬜ | | | | |
+| 4 | Fleet | ✅ | Claude (for backend developer) | 2026-11-12 | 2026-11-12 | `feat/phase-4-fleet` |
 | 5 | Monitoring | ⬜ | | | | |
 | 6 | Identity | ⬜ | | | | |
 | 7 | Reporting & dashboard | ⬜ | | | | |
@@ -50,15 +50,20 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
 
+### Phase 4: Fleet (done)
+- [x] New machine provisioned via API and online without manual DB edits (EMQX user = documented manual step, see `readmePhase4.md`)
+- [x] `[MANUAL CHECK]` Offline within 3 min of power loss; price change confirmed by `CFG,OK` — 2026-11-12, real ESP32 v0.5.1: `CFG,0.20,0.25,0.30,USD,1` → `config/ack ok`, next QR 0.20 USD; power unplugged → `MachineWentOffline` after 53 s (Last Will), back online within seconds
+- [x] `PROGRESS.md` updated with handoff note
+
 ### Phase 3: Dispensing & refund review
 - [x] Every PAID payment ends in DISPENSED, REFUNDED or REFUND_REJECTED — none refunded while outcome unknown
-- [ ] `[MANUAL CHECK]` Outcomes survive ESP32 reboot, STM32 reboot and 2 h offline
+- [ ] `[MANUAL CHECK]` Outcomes survive ESP32 reboot, STM32 reboot and 2 h offline — **ESP32 reboot ✅ 2026-11-12** (backend off, `DONE` stored in NVS, ESP32 reset, backend on → PAID → DISPENSE_UNKNOWN (no refund) → DISPENSED, queue drained). STM32 reboot (needs STM32) and 2 h offline still open
 - [x] No infinite replay: every outcome is acked `ok` or `rejected`, or expires by policy (counted)
 - [x] Two operators cannot refund the same case
 - [x] `PROGRESS.md` updated with handoff note
 
-### Phase 2: Payments (awaiting manual hardware check)
-- [ ] `[MANUAL CHECK]` Real ESP32: `1` → QR → ABA simulator pay → `PAID` → `DONE` → **`transaction/ack` received**, on the new backend
+### Phase 2: Payments (done)
+- [x] `[MANUAL CHECK]` Real ESP32: `1` → QR → ABA simulator pay → `PAID` → `DONE` → **`transaction/ack` received**, on the new backend — 2026-11-12, ESP32 v0.5.0, ABA sandbox: payment `mwdk383i68c9579706` DISPENSED with ABA approval code
 - [x] 20 parallel `pay/request` for one machine leave exactly one open payment
 - [x] With the callback endpoint disabled, payments still confirm via sweeps, and a late payment is found by reconcile
 - [x] Killing api/worker or flushing Redis never loses or duplicates `PAID`
@@ -93,12 +98,16 @@ Things an AI agent can't do. A person does them, then ticks the box.
 | STM32 developer confirms UART contract C3 + fault codes C8 (questions 9–10 in §F3) | 0 | Hardware developer | ⬜ |
 | Hardware developer reviews 📝 draft docs and fills in TBD (STM32 model, pins, prices) | 0 | Hardware developer | ⬜ |
 | Enable branch protection on `main` | 0 | Backend developer | ⬜ |
-| Real ESP32 cut-over test with firmware **v0.4.1**: 1 -> QR -> ABA simulator pay -> PAID -> DONE -> transaction/ack (see readmePhase2.md) | 2 | Backend / Hardware developer | ⬜ |
-| Real ESP32 NVS queue test with firmware **v0.4.1**: simulate offline dispense, reboot ESP32, verify outcome replay & draining (see readmePhase3.md) | 3 | Backend / Hardware developer | ⬜ |
-| Move your real `secrets.h` from the old `esp32-gateway/include/` to `firmware/esp32-gateway/include/` (git-ignored; Phase 0 moved the folder but not this file) | 3 | Backend developer | ⬜ |
+| Real ESP32 cut-over test with firmware **v0.4.1**: 1 -> QR -> ABA simulator pay -> PAID -> DONE -> transaction/ack (see readmePhase2.md) | 2 | Backend / Hardware developer | ✅ 2026-11-12 |
+| Real ESP32 NVS queue test with firmware **v0.4.1**: simulate offline dispense, reboot ESP32, verify outcome replay & draining (see readmePhase3.md) | 3 | Backend / Hardware developer | ✅ ESP32 part 2026-11-12; STM32 reboot + 2 h offline open |
+| Move your real `secrets.h` from the old `esp32-gateway/include/` to `firmware/esp32-gateway/include/` (git-ignored; Phase 0 moved the folder but not this file) | 3 | Backend developer | ✅ |
 | Existing local dev databases (created with `db push`): run `pnpm --filter @wrm/api exec prisma migrate resolve --applied 20261111000000_init`, then `pnpm --filter @wrm/api db:deploy` | 3 | Each developer | ⬜ |
 | Before the pilot: generate `ADMIN_API_KEY` (≥ 32 chars) for staging/production `.env` and keep it private | 3.5 | Backend developer | ⬜ |
-| Confirm the first GitHub Actions run of the new CI workflow is green (could not be run from the review machine) | 3 | Backend developer | ⬜ |
+| Confirm the first GitHub Actions run of the new CI workflow is green (could not be run from the review machine) | 3 | Backend developer | ✅ |
+| Flash ESP32 **v0.5.0**, then run Phase 4 checks: price change → `CFG,OK`; offline within 3 min of power loss (`readmePhase4.md` §3) | 4 | Backend developer | ✅ 2026-11-12 (v0.5.1) |
+| EMQX `wrm-backend` password was committed in `424e5e6`: changed in the EMQX console 2026-11-12 | — | Backend developer | ✅ |
+| For every machine provisioned with `POST /v1/machines`: add its MQTT user in the EMQX console with the one-time password (and delete it on decommission) | 4 | Backend developer | ⬜ |
+| Hardware developer: STM32 handles `CFG,<p500>,<p750>,<p1000>,<currency>,<enabled>` (major units), answers `CFG,OK` / `CFG,ERR,<fault>`, keeps prices in flash | 4 | Hardware developer | ⬜ |
 
 ---
 
@@ -142,6 +151,59 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-12: Hardware test session (real ESP32, no STM32) by backend developer + Claude
+
+**Done**
+- New backend connected to EMQX Cloud and the ABA sandbox (`apps/api/.env`: MQTT_URL/MQTT_CA_FILE to EMQX, `PAYWAY_MODE=sandbox`, `PAYWAY_CALLBACK_URL=""`; the backend confirms payments by polling ABA).
+- A: real ABA simulator payment → PAID → DONE → `transaction/ack ok` ✅ (Phase 2 DoD).
+- B: outcome survives an ESP32 reboot while the backend is down ✅ (part of the Phase 3 DoD).
+- C: price change → `CFG` → `config/ack ok` → next QR at the new price ✅. Found + fixed: a config that was never confirmed was not re-delivered (ESP32 **v0.5.1**, `d8f6b2f`).
+- D: offline 53 s after power loss (Last Will), back online at once ✅ (Phase 4 DoD).
+- Removed a real EMQX password committed in `backend-prototype/.env.example` (`e82879e`); the password was changed in EMQX.
+
+**Notes**
+- The QR line sends the amount as a JSON number (`0.2`), the config sends `"0.20"`. The STM32 LCD should show 2 decimals (or the backend can format it) — open.
+- WRM-001 prices are now 0.20 / 0.25 / 0.30 USD in the local DB after test C.
+
+---
+
+### 2026-11-13: Phase 4 Fleet (automated complete, awaiting hardware check) by Claude
+
+**Done this session** (branch `feat/phase-4-fleet`)
+- Fleet machine API `/v1/machines`: provision (currency + 3 prices required; MQTT username `wrm-NNN` + one-time password shown once), list, get, PATCH (name/location/enabled), PUT prices, rotate-credentials, decommission (`machines.decommissioned_at`, cannot be re-enabled).
+- `fleet.MachineConfigChanged` → retained `config` (prices in major units, built from the DB at publish time); `config/ack` error → `fleet.ConfigRejected`.
+- Presence: `MachineCameOnline` / `MachineWentOffline`, Last Will, `sweep.fleet-offline` (30 s, offline after 180 s).
+- Payments prices payments through the Fleet public port (`FLEET_MACHINE_PRICING`); the temporary Prisma machine adapter is removed.
+- ESP32 firmware **v0.5.0**: `config` → `CFG` (retry 5 s ×12) → `config/ack`; resend when the UART link returns.
+- Docs: `readmePhase4.md`, plan v3.3, review note at the top of `readmePhase3.md`.
+
+**Not finished / next steps** (in order)
+1. Merge `feat/phase-4-fleet`.
+2. People: section 4 (flash v0.5.0, hardware checks for Phases 2–4, EMQX users).
+3. Phase 5 (Monitoring) — can start before the hardware checks if the team agrees, like Phase 4 did.
+
+**Changed from the plan** (plan updated to v3.3)
+- EMQX users are created/rotated manually (Serverless management API not confirmed); the "old password rejected" E2E test is not possible without it.
+- Provisioning requires prices (plan said "default prices").
+- After 12 unanswered `CFG` lines the ESP32 reports `config/ack error UNKNOWN`.
+- STM32 "reboot" is detected only as UART link lost (≥ 15 s) and back; C3 has no reboot signal.
+
+**Known issues / bugs**
+- Once, `refund-flow.e2e` failed in its `beforeAll` during a full run (app start > 30 s while the laptop was shutting down). Not reproduced in 3 later full runs. If it happens again, raise the hook timeout or look at app start time.
+- Phase 2 + 3 hardware checks still open (unchanged).
+- Metrics for unknown-machine heartbeats come with Observability (Phase 8); price-change audit log with Identity (Phase 6).
+
+**How to run / test**
+- `pnpm --filter @wrm/api db:deploy` (new migration `20261112000000_add_machine_decommissioned_at`).
+- `pnpm --filter @wrm/api test` → 26 files / 126 tests.
+- `pio run -d firmware/esp32-gateway` → v0.5.0 builds (73 % flash).
+- Manual: `readmePhase4.md` §3.
+
+**Needs from a person**
+- See section 4.
 
 ---
 

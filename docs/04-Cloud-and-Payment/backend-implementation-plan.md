@@ -9,7 +9,7 @@
 | **Status** | Approved plan — progress is tracked in **[PROGRESS.md](../PROGRESS.md)** (not in this file) |
 | **Owner** | Backend (also owns the ESP32 gateway) |
 | **Prototype** | `backend/` (Node.js) stays running until Phase 2 cut-over |
-| **Last updated** | 2026-11-12 |
+| **Last updated** | 2026-11-13 |
 
 ### Revision history
 
@@ -33,6 +33,7 @@
 | v3 | **Early pilot** (Phase 3.5) running in parallel; go-live ≈ week 20 | Pilot could not fit in a 2-week phase |
 | v3 | Architecture and Deployment docs re-synchronised | Document drift |
 | v3.1 | **C10 ABA PayWay API reference** (moved out of prototype code); **Read before starting** per phase | Prototype is deleted after Phase 3; agents need every input listed |
+| v3.3 | Phase 4 decisions: `config`/`CFG` prices in **major units**; provisioning **requires** currency + all three prices (no defaults); EMQX users created/rotated by a **documented manual step** (Serverless API not confirmed); `CFG` unanswered after 12 tries → `config/ack error UNKNOWN`; `machines.decommissioned_at`; codes `FLEET_MACHINE_EXISTS`, `FLEET_MACHINE_DECOMMISSIONED` | Contract details the plan left open |
 | v3.2 | Phase 0–3 review fixes: operator endpoints via `X-Admin-Key` until Phase 6 (C7, B5 `ADMIN_API_KEY`); `payments.reconcile_count` (C6); minimal `heartbeat`/`online` consumer pulled into Phase 3 (Phase 4 task 2) | Refund guards need `pending_outcomes`; the pilot needs operator access before login exists |
 | v3.1 | AI-agent handoff: `PROGRESS.md`, task tags `[HUMAN]` / `[HARDWARE]` / `[MANUAL CHECK]`, **Needs before starting** per phase, handoff DoD item, B8 commit style | Several developers / AI agents continue each other's phases |
 
@@ -209,6 +210,8 @@ Domain/application code **throws** typed errors (no `Result` type). Adapters tra
 | `REFUND_ALREADY_DECIDED` | Conflict | 409 | — | No | info | No |
 | `REFUND_BLOCKED_PENDING_OUTCOMES` | Domain | 409 (admin override with reason) | — | No | warn | No |
 | `CFG_REJECTED` | Domain | — | — | No | warn | Yes |
+| `FLEET_MACHINE_EXISTS` | Conflict | 409 | — | No | info | No |
+| `FLEET_MACHINE_DECOMMISSIONED` | Conflict | 409 | — | No | info | No |
 | `CONCURRENCY_CONFLICT` | Conflict | 409 | — | Yes (×3) | warn | No |
 | `AUTH_UNAUTHENTICATED` / `AUTH_FORBIDDEN` | Auth | 401 / 403 | — | No | info / warn | No |
 | `RATE_LIMITED` | RateLimit | 429 | `failed` (`RATE_LIMITED`) | Device policy (B4.7) | warn | If sustained |
@@ -436,7 +439,7 @@ JSON, UTF-8, Zod schemas in `packages/contracts/src/mqtt.ts`. Prefix `wrm/{machi
 | `heartbeat` | M → B | 0 | no | `{ v:1, fw, uptime_s, rssi, heap, stm32: { link, state, tran_id?, tank, fault }, pending_outcomes, rejected_outcomes, dropped_outcomes, ts }` |
 | `error` | M → B | 1* | no | `{ v:1, fault, tran_id?, ts }` |
 | `online` | M → B | 1 | **yes** | `"1"` / `"0"` (Last Will) |
-| `config` | B → M | 1 | **yes** | `{ v:1, prices: { "500", "750", "1000" }, currency, enabled }` |
+| `config` | B → M | 1 | **yes** | `{ v:1, prices: { "500", "750", "1000" }, currency, enabled }` — prices are **major-unit strings** (`"0.15"`, `"500"`); `enabled` is false for a disabled or decommissioned machine |
 | `config/ack` | M → B | 1* | no | `{ v:1, status: "ok"\|"error", fault? }` |
 | `ota/*` | — | — | — | **Reserved** (Phase 11) |
 
@@ -468,7 +471,7 @@ Text lines, `\n`-terminated, 115200 8N1. `<fault>` values from C8.
 | `PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault>` | S → E | Stopped early (`BOTTLE_REMOVED`, `BOTTLE_TIMEOUT`, `TANK_EMPTY`, …) |
 | `ERR,<fault>[,<tran_id>]` | S → E | Fault (with `tran_id` during a payment = outcome `error`) |
 | `ACK,<tran_id>` | E → S | ESP32 stored the outcome in NVS — STM32 may forget it |
-| `CFG,<price_500>,<price_750>,<price_1000>,<currency>,<enabled 0\|1>` | E → S | Prices/config |
+| `CFG,<price_500>,<price_750>,<price_1000>,<currency>,<enabled 0\|1>` | E → S | Prices/config — prices in **major units** (`0.15`); repeated every 5 s, max 12, then `config/ack error UNKNOWN` |
 | `CFG,OK` / `CFG,ERR,<fault>` | S → E | Config applied / rejected |
 | `NET,OK` / `NET,DOWN` | E → S | Network status |
 | `PING` | E → S | Every 5 s |
@@ -558,6 +561,7 @@ model Machine {
   lastSeenAt       DateTime? @map("last_seen_at")
   online           Boolean   @default(false)
   lastStm32State   String?   @map("last_stm32_state")
+  decommissionedAt DateTime? @map("decommissioned_at")   // retired: never enabled again
   pendingOutcomes  Int       @default(0) @map("pending_outcomes")
   version          Int       @default(0)           // optimistic lock; row also used for per-machine FOR UPDATE
   prices           MachinePrice[]
@@ -753,7 +757,7 @@ Base `/v1`. Responses `{ data }` / `{ error: { code, message, details?, traceId 
 | `POST /v1/refund-cases/:tranId/reject` | admin | Reason required | 3 |
 | `POST /v1/refund-cases/:tranId/reopen` | admin | Reason required | 3 |
 | `POST /v1/payments/:tranId/resolve-unknown` | admin | Decide DISPENSE_UNKNOWN (blocked while `pending_outcomes > 0` unless override reason) | 3 |
-| `POST /v1/machines` | admin | Provision: row + default prices + MQTT username + **one-time password** | 4 |
+| `POST /v1/machines` | admin | Provision: row + prices (**required**: currency + 500/750/1000 in minor units) + MQTT username + **one-time password** (shown once; EMQX user added manually) | 4 |
 | `GET /v1/machines`, `/v1/machines/:id` | viewer | Fleet | 4 |
 | `PATCH /v1/machines/:id` | admin | Enable/disable, name, location | 4 |
 | `PUT /v1/machines/:id/prices` | admin | Prices for 500/750/1000 (audit) | 4 |

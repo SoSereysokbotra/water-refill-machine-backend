@@ -22,7 +22,7 @@ import {
 import {
   MockPayWayGateway,
   PayWayGatewayAdapter,
-  PrismaMachineAdapter,
+  FleetMachineAdapter,
   PrismaPaymentRepository,
 } from './infrastructure';
 import {
@@ -48,7 +48,7 @@ import {
     },
     {
       provide: 'MachinePort',
-      useClass: PrismaMachineAdapter,
+      useClass: FleetMachineAdapter,
     },
     {
       provide: 'PaymentGateway',

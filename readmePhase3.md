@@ -2,6 +2,15 @@
 
 This document details the completed implementation of **Phase 3: Dispensing & refund review** for the Water Refill Machine monorepo.
 
+> [!IMPORTANT]
+> **Updated after the Phase 0–3 review (2026-11-12, branch `fix/phase-3-review`).** Where this guide differs, the code and [PROGRESS.md](docs/PROGRESS.md) are right:
+> - ESP32 firmware is now **v0.4.1+** (v0.4.0 did not compile and upper-cased `tran_id`s). It repeats `PAID,<tran_id>` (no volume).
+> - Dispense records are **insert-only**: an identical re-send is acked `ok` with no change; a different late outcome keeps the original record and raises `ReconciliationNeeded`.
+> - Refund REST: `actorId` is required, the claim lasts `REFUND_CLAIM_MINUTES` (a `durationMinutes` field is ignored), only the **active claimant** can mark refunded, the amount must be 1..paid. Outside `APP_ENV=local` send `X-Admin-Key`.
+> - `pending_outcomes` now comes from heartbeats; DISPENSE_UNKNOWN escalates only if the machine was seen online after the payment.
+> - Late payments get a `LATE_PAYMENT` refund case. `REFUND_MODE=auto` has no executor (refunds are manual).
+> - Mosquitto container name is `wrm-mosquitto` (not `infra-mosquitto-1`) in the commands below.
+
 Phase 3 guarantees that every dispense outcome is recorded reliably even across network cuts and reboots, provides automated sensor discrepancy detection, enforces the ADR-0008 refund calculation, and provides an operator refund review workflow guarded against premature payouts while machine outcomes remain queued in hardware NVS storage.
 
 ---

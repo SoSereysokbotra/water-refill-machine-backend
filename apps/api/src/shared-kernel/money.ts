@@ -52,6 +52,11 @@ export class Money {
     return this.amountMinor === other.amountMinor && this.currency === other.currency;
   }
 
+  /** Major units as a decimal string for devices (C2 `config`, C3 `CFG`): USD "0.15", KHR "500". */
+  toMajorString(): string {
+    return this.currency === 'KHR' ? String(this.amountMinor) : (this.amountMinor / 100).toFixed(2);
+  }
+
   format(): string {
     if (this.currency === 'KHR') {
       return `${this.amountMinor} ៛`;

@@ -1,4 +1,4 @@
-// ESP32 gateway for the Water Refill Machine (v0.4.1).
+// ESP32 gateway for the Water Refill Machine (v0.5.1).
 //
 //   STM32 (machine control)  <--UART2-->  ESP32 (this)  <--MQTT/TLS-->  EMQX Cloud  <-->  Backend
 //
@@ -7,9 +7,15 @@
 //   STM32 -> ESP32 : REQ_PAY,<volume_ml> | CANCEL | CANCEL,<tran_id> | DONE,<tran_id>,<flow_ml>,<weight_g>
 //                    PARTIAL,<tran_id>,<flow_ml>,<weight_g>,<fault> | ERR,<fault>[,<tran_id>]
 //                    PAID,ACK,<tran_id> | PAID,REJECT,<tran_id>,<fault> | PONG,<state>,<tran_id|0>,<tank>,<fault>
+//                    CFG,OK | CFG,ERR,<fault>
 //   ESP32 -> STM32 : QR,<tran_id>,<amount>,<currency>,<remaining_s>,<qr_string>
 //                    PAID,<tran_id> | EXPIRED,<tran_id> | FAILED,<tran_id|0> | CANCELLED,<tran_id>
 //                    ACK,<tran_id> | NET,OK | NET,DOWN | PING
+//                    CFG,<price_500>,<price_750>,<price_1000>,<currency>,<enabled 0|1>   (prices in major units)
+//
+// v0.5.0 (Phase 4): retained MQTT `config` -> CFG line to the STM32, retried every 5 s (max 12) until
+//   CFG,OK / CFG,ERR -> config/ack; after 12 tries config/ack error UNKNOWN. The last config is re-sent
+//   when the UART link comes back after being lost (STM32 restarted / re-wired).
 //
 // v0.4.1 fixes:
 //   - STM32 lines are no longer upper-cased (tran_ids are lowercase; DONE,<tran_id> was rejected)
@@ -36,7 +42,7 @@
 #include "secrets.h"
 #include "ca_cert.h"
 
-#define FW_VERSION          "0.4.1"
+#define FW_VERSION          "0.5.1"
 #define STM32_RX_PIN        16      // ESP32 RX2  <- STM32 TX
 #define STM32_TX_PIN        17      // ESP32 TX2  -> STM32 RX
 #define STM32_BAUD          115200
@@ -91,6 +97,15 @@ String cancelledRequestId;          // request cancelled locally before its QR a
 
 // Last PONG from the STM32 (C3): PONG,<state>,<tran_id|0>,<tank>,<fault>
 String stm32State, stm32Tran, stm32Tank, stm32Fault;
+
+// Machine config (C2 `config` -> C3 `CFG`), B4.7: retry every 5 s, max 12, then config/ack error
+#define CFG_RETRY_MS        5000UL
+#define CFG_MAX_TRIES       12
+String cfgLine;                     // last CFG line built from the retained config ("" = none yet)
+bool cfgPending = false;            // waiting for CFG,OK / CFG,ERR
+bool cfgApplied = false;            // true only after CFG,OK for cfgLine
+int cfgTries = 0;
+unsigned long lastCfgSend = 0;
 
 // Repeating PAID until PAID,ACK or PAID,REJECT
 bool repeatingPaid = false;
@@ -318,6 +333,7 @@ void printMenu() {
   Serial.println("|  S  Show network & queue status         |");
   Serial.println("|  Q  Reprint last QR                     |");
   Serial.println("|  I  Invert QR colours                   |");
+  Serial.println("|  CFG,OK  Fake STM32 config reply        |");
   Serial.println("+-----------------------------------------+");
   Serial.println("Or type raw STM32 commands: REQ_PAY,500 / DONE,<tran>,<flow>,<weight> / PAID,ACK,<tran>");
   Serial.println();
@@ -358,6 +374,23 @@ void printQr(const String &text) {
     Serial.println();
   }
   Serial.println();
+}
+
+// ---------- machine config (CFG) ----------
+void publishConfigAck(bool ok, const String &fault) {
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["status"] = ok ? "ok" : "error";
+  if (!ok) doc["fault"] = fault;
+  publishJson("config/ack", doc);
+}
+
+void startCfgDelivery() {
+  if (!cfgLine.length()) return;
+  cfgPending = true;
+  cfgTries = 1;
+  lastCfgSend = millis();
+  toStm32(cfgLine);
 }
 
 // ---------- MQTT callbacks ----------
@@ -458,6 +491,28 @@ void onMqttMessage(char *t, byte *payload, unsigned int len) {
     String status = doc["status"].as<String>();
     Serial.printf("  [mqtt] transaction/ack for %s: %s\n", tran.c_str(), status.c_str());
     removeOutcome(tran.c_str(), status == "rejected");
+  } else if (tp.endsWith("/config")) {
+    // C2: { v:1, prices: {"500","750","1000"} (major units), currency, enabled } -> C3 CFG line
+    const char *p500 = doc["prices"]["500"];
+    const char *p750 = doc["prices"]["750"];
+    const char *p1000 = doc["prices"]["1000"];
+    const char *cur = doc["currency"];
+    if (!p500 || !p750 || !p1000 || !cur || !doc["enabled"].is<bool>()) {
+      Serial.println("  [mqtt] invalid config ignored");
+      publishConfigAck(false, "CFG_INVALID");
+      return;
+    }
+    String line = String("CFG,") + p500 + "," + p750 + "," + p1000 + "," + cur + "," + (doc["enabled"].as<bool>() ? "1" : "0");
+    // Skip only if this exact config was confirmed (CFG,OK) or is being delivered right now.
+    // After a failure (CFG,ERR / 12 tries) the same config is delivered again.
+    if (line == cfgLine && (cfgApplied || cfgPending)) {
+      Serial.println(cfgApplied ? "  [mqtt] config unchanged (already applied)" : "  [mqtt] config already being delivered");
+      return;
+    }
+    cfgLine = line;
+    cfgApplied = false;
+    printBanner("CONFIG", cfgLine);
+    startCfgDelivery();
   }
 }
 
@@ -508,12 +563,12 @@ void handleLine(String line, bool fromUsb) {
       String kw = line.substring(0, kc);
       kw.toUpperCase();
       String rest = line.substring(kc + 1);
-      // PAID,ACK / PAID,REJECT: the sub-keyword is a keyword too
-      int kc2 = rest.indexOf(',');
-      if (kw == "PAID" && kc2 > 0) {
-        String sub = rest.substring(0, kc2);
+      // PAID,ACK / PAID,REJECT / CFG,OK / CFG,ERR: the sub-keyword is a keyword too
+      if (kw == "PAID" || kw == "CFG") {
+        int kc2 = rest.indexOf(',');
+        String sub = kc2 > 0 ? rest.substring(0, kc2) : rest;
         sub.toUpperCase();
-        rest = sub + rest.substring(kc2);
+        rest = sub + (kc2 > 0 ? rest.substring(kc2) : String(""));
       }
       line = kw + "," + rest;
     } else {
@@ -539,6 +594,8 @@ void handleLine(String line, bool fromUsb) {
                     lastStatus.length() ? lastStatus.c_str() : "-", FW_VERSION);
       Serial.printf("  [nvs queue] pending=%d  rejected=%u  dropped=%u\n",
                     outcomeCount, rejectedOutcomes, droppedOutcomes);
+      Serial.printf("  [config] %s%s\n", cfgLine.length() ? cfgLine.c_str() : "(none yet)",
+                    cfgPending ? "  (waiting for CFG,OK)" : "");
       Serial.printf("  [stm32] state=%s tran=%s tank=%s fault=%s\n", stm32State.length() ? stm32State.c_str() : "-",
                     stm32Tran.length() ? stm32Tran.c_str() : "-", stm32Tank.length() ? stm32Tank.c_str() : "-",
                     stm32Fault.length() ? stm32Fault.c_str() : "-");
@@ -554,6 +611,11 @@ void handleLine(String line, bool fromUsb) {
   if (line == "PING") { toStm32("PONG"); return; }
   if (line == "PONG" || line.startsWith("PONG,")) {
     lastPong = millis();
+    if (stm32Lost && cfgLine.length()) {
+      // UART link back after being lost (STM32 restarted / re-wired): send the config again
+      Serial.println("  [uart] STM32 link restored -> re-sending config");
+      startCfgDelivery();
+    }
     stm32Lost = false;
     // PONG,<state>,<tran_id|0>,<tank>,<fault>
     if (line.length() > 5) {
@@ -581,6 +643,19 @@ void handleLine(String line, bool fromUsb) {
     requestPayment(rest.toInt());
   } else if (cmd == "CANCEL" || cmd == "REQ_CANCEL") {
     cancelPayment();
+  } else if (cmd == "CFG") {
+    // C3: CFG,OK | CFG,ERR,<fault>
+    if (!cfgPending) {
+      Serial.println("  CFG reply ignored (no config waiting)");
+    } else if (rest == "OK") {
+      cfgPending = false;
+      cfgApplied = true;
+      publishConfigAck(true, "");
+    } else if (rest.startsWith("ERR")) {
+      cfgPending = false;
+      int a = rest.indexOf(',');
+      publishConfigAck(false, a < 0 ? String("CFG_INVALID") : rest.substring(a + 1));
+    }
   } else if (cmd == "PAID") {
     // STM32 responses to repeated PAID: PAID,ACK,<tran> or PAID,REJECT,<tran>,<fault>
     int a = rest.indexOf(',');
@@ -671,6 +746,7 @@ void ensureMqtt() {
   mqtt.subscribe(topic("pay/qr").c_str(), 1);
   mqtt.subscribe(topic("pay/status").c_str(), 1);
   mqtt.subscribe(topic("transaction/ack").c_str(), 1);
+  mqtt.subscribe(topic("config").c_str(), 1);   // retained: delivered again on every connect
   Serial.println("[mqtt] connected");
   setNet(true);
   static bool menuShown = false;
@@ -710,6 +786,19 @@ void loop() {
   if (usbReader.read(Serial, line)) handleLine(line, true);
 
   unsigned long now = millis();
+
+  // CFG retry (B4.7): every 5 s until CFG,OK / CFG,ERR, max 12 tries, then config/ack error UNKNOWN
+  if (cfgPending && now - lastCfgSend > CFG_RETRY_MS) {
+    if (cfgTries < CFG_MAX_TRIES) {
+      cfgTries++;
+      lastCfgSend = now;
+      toStm32(cfgLine);
+    } else {
+      cfgPending = false;
+      Serial.println("  [cfg] STM32 did not answer CFG after 12 tries");
+      publishConfigAck(false, "UNKNOWN");
+    }
+  }
 
   // Repeating PAID every 2 seconds until acknowledged by STM32
   if (repeatingPaid && (now - lastPaidRepeatTime > 2000)) {
