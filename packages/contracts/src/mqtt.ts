@@ -182,6 +182,7 @@ export interface NormalizedHeartbeat {
   fw?: string;
   stm32Link?: 'ok' | 'lost';
   stm32State?: z.infer<typeof Stm32StateSchema>;
+  stm32Fault?: string;
   pendingOutcomes: number;
 }
 
@@ -196,6 +197,7 @@ export function parseHeartbeatPayload(
         fw: v1.data.fw,
         stm32Link: v1.data.stm32.link,
         stm32State: v1.data.stm32.state,
+        stm32Fault: v1.data.stm32.fault,
         pendingOutcomes: v1.data.pending_outcomes,
       },
     };

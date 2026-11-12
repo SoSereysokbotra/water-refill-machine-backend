@@ -7,6 +7,7 @@ import { OutboxService } from '../../../../platform/outbox/outbox.service';
 import { Payment } from '../../domain/payment.aggregate';
 import { PaymentRepository } from '../../domain/ports/payment.repository';
 import { RefundCase } from '../../domain/refund-case.entity';
+import { siteCheckNeededEvent } from '../../domain/payment.events';
 
 @Injectable()
 export class DispensingSweep extends BaseSweep<Payment> {
@@ -68,11 +69,22 @@ export class DispensingSweep extends BaseSweep<Payment> {
         presence.lastSeenAt !== null && item.paidAt !== null && presence.lastSeenAt.getTime() > item.paidAt.getTime();
 
       if (!seenSincePayment) {
-        // C1: machine not online since the payment -> site check needed, stay DISPENSE_UNKNOWN
-        // (Telegram alert comes with Monitoring in Phase 5)
         this.logger.warn(
           `Payment ${item.tranId}: machine ${item.machineId} not seen online since payment; site check needed, holding in DISPENSE_UNKNOWN`,
         );
+        await this.uow.run(async (tx) => {
+          const alreadyRaised = await tx.outbox.findFirst({
+            where: { aggregateId: item.tranId, eventType: 'dispensing.SiteCheckNeeded' },
+          });
+          if (!alreadyRaised) {
+            await this.outbox.add(
+              [siteCheckNeededEvent({ tranId: item.tranId, machineId: item.machineId }, now)],
+              tx,
+              'Payment',
+              item.tranId,
+            );
+          }
+        });
         return;
       }
 

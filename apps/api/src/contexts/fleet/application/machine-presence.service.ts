@@ -3,7 +3,12 @@ import { ConfigAckV1, NormalizedHeartbeat } from '@wrm/contracts';
 import { PrismaTransaction, UnitOfWork } from '../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../platform/outbox/outbox.service';
 import { Clock } from '../../../shared-kernel';
-import { configRejectedEvent, machineCameOnlineEvent, machineWentOfflineEvent } from './fleet.events';
+import {
+  configRejectedEvent,
+  machineCameOnlineEvent,
+  machineFaultReportedEvent,
+  machineWentOfflineEvent,
+} from './fleet.events';
 
 /**
  * Machine presence (Phase 4 task 2; minimal version added in Phase 3):
@@ -27,10 +32,42 @@ export class MachinePresenceService {
     await this.uow.run(async (tx) => {
       const known = await this.markSeen(tx, machineId, now);
       if (!known) return;
+
+      const currentMachine = await tx.machine.findUnique({ where: { id: machineId } });
+      if (!currentMachine) return;
+
+      // Pending outcomes timestamp: set when 0 -> >0 (or >0 and unset), cleared when 0
+      let pendingOutcomesSince = currentMachine.pendingOutcomesSince;
+      if (hb.pendingOutcomes > 0) {
+        if (currentMachine.pendingOutcomes === 0 || !pendingOutcomesSince) {
+          pendingOutcomesSince = now;
+        }
+      } else {
+        pendingOutcomesSince = null;
+      }
+
+      // Track stm32.fault changes
+      const prevHb = await tx.heartbeat.findFirst({
+        where: { machineId },
+        orderBy: { at: 'desc' },
+      });
+      const prevFault = ((prevHb?.data as Record<string, unknown> | null)?.stm32 as Record<string, unknown> | null)?.fault as string | undefined ?? 'NONE';
+      const currentFault = hb.stm32Fault ?? 'NONE';
+
+      if (currentFault !== prevFault) {
+        await this.outbox.add(
+          [machineFaultReportedEvent({ machineId, fault: currentFault }, now)],
+          tx,
+          'Machine',
+          machineId,
+        );
+      }
+
       await tx.machine.update({
         where: { id: machineId },
         data: {
           pendingOutcomes: hb.pendingOutcomes,
+          pendingOutcomesSince,
           ...(hb.fw !== undefined ? { firmware: hb.fw } : {}),
           ...(hb.stm32State !== undefined ? { lastStm32State: hb.stm32State } : {}),
         },
