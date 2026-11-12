@@ -1,1 +1,2 @@
-export const MONITORING_INTERFACE = 'monitoring/interface';
+export * from './alerts.controller';
+export * from './monitoring-outbox.handlers';

@@ -235,15 +235,6 @@ export class MachinesService implements FleetMachinePricingPort, FleetMonitoring
       ],
     };
   }
-}
-
-function assertPrices(prices: TierPrices): void {
-  for (const v of VOLUME_TIERS) {
-    const p = prices[v];
-    if (!Number.isInteger(p) || p <= 0) {
-      throw new ValidationError(`Price for ${v} mL must be a positive integer in minor units`);
-    }
-  }
 
   async getMachinesWithStuckOutcomes(olderThanMinutes: number): Promise<MachineStuckOutcomes[]> {
     const cutoff = new Date(this.clock.now().getTime() - olderThanMinutes * 60 * 1000);
@@ -263,6 +254,15 @@ function assertPrices(prices: TierPrices): void {
       pendingOutcomes: r.pendingOutcomes,
       pendingOutcomesSince: r.pendingOutcomesSince!,
     }));
+  }
+}
+
+function assertPrices(prices: TierPrices): void {
+  for (const v of VOLUME_TIERS) {
+    const p = prices[v];
+    if (!Number.isInteger(p) || p <= 0) {
+      throw new ValidationError(`Price for ${v} mL must be a positive integer in minor units`);
+    }
   }
 }
 

@@ -109,8 +109,8 @@ import {
     PaymentsSweep,
     ReconcileSweep,
     DispensingSweep,
+    PAYMENTS_REFUND_MONITORING,
   ],
-  exports: [PAYMENTS_REFUND_MONITORING, 'PaymentRepository'],
 })
 export class PaymentsModule implements OnModuleInit {
   constructor(
