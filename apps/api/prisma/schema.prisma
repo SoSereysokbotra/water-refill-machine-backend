@@ -71,6 +71,7 @@ model Machine {
   online          Boolean        @default(false)
   lastStm32State  String?        @map("last_stm32_state")
   pendingOutcomes Int            @default(0) @map("pending_outcomes")
+  decommissionedAt DateTime?     @map("decommissioned_at") // retired: never enabled again (Phase 4)
   version         Int            @default(0)
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")

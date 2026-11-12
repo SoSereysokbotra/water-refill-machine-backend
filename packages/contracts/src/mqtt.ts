@@ -209,3 +209,24 @@ export function parseHeartbeatPayload(
   }
   return { success: false, error: v1.error };
 }
+
+// ---------------------------------------------------------------------------
+// config (backend -> machine, retained) and config/ack (machine -> backend) — Plan §C2
+// Prices are MAJOR units as decimal strings (same as the QR amount): USD "0.15", KHR "500".
+// ---------------------------------------------------------------------------
+export const MajorPriceSchema = z.string().regex(/^\d+(\.\d{2})?$/, 'major units: "0.15" (USD) or "500" (KHR)');
+
+export const ConfigV1Schema = z.object({
+  v: z.literal(1),
+  prices: z.object({ '500': MajorPriceSchema, '750': MajorPriceSchema, '1000': MajorPriceSchema }),
+  currency: CurrencySchema,
+  enabled: z.boolean(),
+});
+export type ConfigV1 = z.infer<typeof ConfigV1Schema>;
+
+export const ConfigAckV1Schema = z.object({
+  v: z.literal(1).default(1),
+  status: z.enum(['ok', 'error']),
+  fault: z.string().optional(),
+});
+export type ConfigAckV1 = z.infer<typeof ConfigAckV1Schema>;

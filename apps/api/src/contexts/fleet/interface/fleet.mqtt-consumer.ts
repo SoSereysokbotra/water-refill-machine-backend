@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { parseHeartbeatPayload } from '@wrm/contracts';
+import { ConfigAckV1Schema, parseHeartbeatPayload } from '@wrm/contracts';
 import { MqttService } from '../../../platform/mqtt/mqtt.service';
 import { MachinePresenceService } from '../application';
 
@@ -15,6 +15,7 @@ export class FleetMqttConsumer implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.mqtt.subscribe('wrm/+/heartbeat', this.onHeartbeat.bind(this));
     await this.mqtt.subscribe('wrm/+/online', this.onOnline.bind(this));
+    await this.mqtt.subscribe('wrm/+/config/ack', this.onConfigAck.bind(this));
   }
 
   async onHeartbeat(topic: string, payload: Buffer): Promise<void> {
@@ -46,5 +47,23 @@ export class FleetMqttConsumer implements OnModuleInit {
       return;
     }
     await this.presence.recordOnline(machineId, value === '1');
+  }
+
+  async onConfigAck(topic: string, payload: Buffer): Promise<void> {
+    const machineId = topic.split('/')[1];
+    if (!machineId) return;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(payload.toString('utf8'));
+    } catch {
+      this.logger.warn(`config/ack from ${machineId} is not JSON`);
+      return;
+    }
+    const parsed = ConfigAckV1Schema.safeParse(raw);
+    if (!parsed.success) {
+      this.logger.warn(`Invalid config/ack from ${machineId}`);
+      return;
+    }
+    await this.presence.recordConfigAck(machineId, parsed.data);
   }
 }
