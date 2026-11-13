@@ -159,6 +159,20 @@ Add a new note at the top at the end of every session.
 
 ---
 
+### 2026-11-13: Phase 5 review (Claude) — merged to main
+
+**Done**
+- Reviewed Gemini's Phase 5 + fixes: `scripts/verify-phase5.sh` PASSED and an extra full run passed (28 files / 163 tests). Telegram jobs are idempotent (`jobId = alertId__action`); acceptance test cleanup limited to WRM-9501.
+
+**Known issues / bugs**
+- The full-suite `afterAll` hangs were fixed by **forced shutdown timeouts** (MQTT `end(true)` after 1 s, BullMQ workers force-closed after 1.5 s, Redis disconnect after 1 s), not by finding the blocking resource. Safe because jobs are at-least-once/idempotent, but a running job (e.g. an ABA check, up to 8 s) is cut off and re-run on restart. Revisit graceful shutdown in Phase 9 (rolling deploys).
+- `docs/04-Cloud-and-Payment/backend-backlog-tasks.md` and `backend-backlog-notion.csv` were added by Gemini (not part of the plan); kept as optional planning docs.
+
+**Needs from a person**
+- Phase 5 `[MANUAL CHECK]`: set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` in `apps/api/.env`, unplug the ESP32 → Telegram alert within 4 min, plug in → "resolved" (`readmePhase5.md`).
+
+---
+
 ### 2026-11-12: Phase 5 Monitoring (automated complete, awaiting manual unplug check) by Claude for backend developer
 
 **Done this session** (branch `feat/phase-5-monitoring`)
