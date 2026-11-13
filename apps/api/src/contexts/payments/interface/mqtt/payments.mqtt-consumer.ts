@@ -11,12 +11,17 @@ import { toErrorCode } from '../../../../shared-kernel/errors';
 import { MqttService } from '../../../../platform/mqtt/mqtt.service';
 import { ConfigService } from '../../../../platform/config/config.service';
 import { RateLimiterService } from '../../../../platform/rate-limit/rate-limiter.service';
+import { UnitOfWork } from '../../../../platform/database/unit-of-work';
+import { OutboxService } from '../../../../platform/outbox/outbox.service';
 import {
   CancelPaymentCommand,
   CancelPaymentHandler,
   CreatePaymentCommand,
   CreatePaymentHandler,
+  faultReportedEvent,
+  outcomeRejectedEvent,
   PaymentRepository,
+  payRequestRejectedEvent,
   RecordDispenseCommand,
   RecordDispenseHandler,
 } from '../../application';
@@ -33,6 +38,8 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     @Inject(RecordDispenseHandler) private readonly recordDispenseHandler: RecordDispenseHandler,
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Inject(UnitOfWork) private readonly uow: UnitOfWork,
+    @Inject(OutboxService) private readonly outbox: OutboxService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -77,6 +84,7 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     } catch {
       this.logger.warn(`Rate limit exceeded for machine ${machineId} on pay/request`);
       await this.publishStatus(machineId, null, 'failed', 'RATE_LIMITED', request_id);
+      await this.raisePayRequestRejected(machineId, 'RATE_LIMITED');
       return;
     }
 
@@ -112,6 +120,7 @@ export class PaymentsMqttConsumer implements OnModuleInit {
       const code = toErrorCode(err);
       this.logger.error(`Error processing pay/request for machine ${machineId}: ${code}`);
       await this.publishStatus(machineId, null, 'failed', code, request_id);
+      await this.raisePayRequestRejected(machineId, code);
     }
   }
 
@@ -143,7 +152,7 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     if (!parsed.success) {
       const tranId = (raw as Record<string, unknown>)?.tran_id;
       const tranIdStr = typeof tranId === 'string' ? tranId : undefined;
-      await this.repo.recordRejection(machineId, tranIdStr, 'DSP_MALFORMED', raw);
+      await this.recordRejectionAndRaiseEvent(machineId, tranIdStr, 'DSP_MALFORMED', raw);
 
       if (tranIdStr) {
         await this.publishAck(machineId, tranIdStr, 'rejected', 'DSP_MALFORMED');
@@ -159,7 +168,7 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     } catch (err: unknown) {
       const code = toErrorCode(err);
       if (['DSP_NOT_PAID', 'DSP_WRONG_MACHINE', 'DSP_UNKNOWN_PAYMENT'].includes(code)) {
-        await this.repo.recordRejection(machineId, parsed.data.tran_id, code, parsed.data);
+        await this.recordRejectionAndRaiseEvent(machineId, parsed.data.tran_id, code, parsed.data);
         await this.publishAck(machineId, parsed.data.tran_id, 'rejected', code);
       } else {
         this.logger.error(`Infrastructure error processing dispense for ${parsed.data.tran_id}: ${(err as Error).message}`);
@@ -199,13 +208,54 @@ export class PaymentsMqttConsumer implements OnModuleInit {
       } catch (err: unknown) {
         const code = toErrorCode(err);
         if (['DSP_NOT_PAID', 'DSP_WRONG_MACHINE', 'DSP_UNKNOWN_PAYMENT'].includes(code)) {
-          await this.repo.recordRejection(machineId, tran_id, code, raw);
+          await this.recordRejectionAndRaiseEvent(machineId, tran_id, code, raw);
           await this.publishAck(machineId, tran_id, 'rejected', code);
         }
       }
     } else {
       // Without tran_id, error goes to Monitoring only
       this.logger.warn(`Machine ${machineId} reported fault [${fault}] with no tran_id`);
+      const now = new Date();
+      await this.uow.run(async (tx) => {
+        await this.outbox.add(
+          [faultReportedEvent({ machineId, fault }, now)],
+          tx,
+          'Machine',
+          machineId,
+        );
+      });
+    }
+  }
+
+  private async recordRejectionAndRaiseEvent(
+    machineId: string,
+    tranId: string | undefined,
+    code: string,
+    raw: unknown,
+  ): Promise<void> {
+    const now = new Date();
+    await this.uow.run(async (tx) => {
+      await this.repo.recordRejection(machineId, tranId, code, raw, tx);
+      await this.outbox.add(
+        [outcomeRejectedEvent({ machineId, tranId, code }, now)],
+        tx,
+        'Machine',
+        machineId,
+      );
+    });
+  }
+
+  private async raisePayRequestRejected(machineId: string, code: string): Promise<void> {
+    if (code === 'PAY_MACHINE_BUSY' || code === 'RATE_LIMITED') {
+      const now = new Date();
+      await this.uow.run(async (tx) => {
+        await this.outbox.add(
+          [payRequestRejectedEvent({ machineId, code }, now)],
+          tx,
+          'Machine',
+          machineId,
+        );
+      });
     }
   }
 

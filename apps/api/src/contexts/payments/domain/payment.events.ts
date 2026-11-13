@@ -182,3 +182,30 @@ export function outcomeRejectedEvent(data: OutcomeRejectedData, occurredAt: Date
 export function reconciliationNeededEvent(data: ReconciliationNeededData, occurredAt: Date): DomainEvent<ReconciliationNeededData> {
   return createDomainEvent('dispensing.ReconciliationNeeded', data, { occurredAt });
 }
+
+export interface SiteCheckNeededData {
+  tranId: string;
+  machineId: string;
+}
+
+export function siteCheckNeededEvent(data: SiteCheckNeededData, occurredAt: Date): DomainEvent<SiteCheckNeededData> {
+  return createDomainEvent('dispensing.SiteCheckNeeded', data, { occurredAt });
+}
+
+export interface FaultReportedData {
+  machineId: string;
+  fault: string;
+}
+
+export function faultReportedEvent(data: FaultReportedData, occurredAt: Date): DomainEvent<FaultReportedData> {
+  return createDomainEvent('dispensing.FaultReported', data, { occurredAt });
+}
+
+export interface PayRequestRejectedData {
+  machineId: string;
+  code: string;
+}
+
+export function payRequestRejectedEvent(data: PayRequestRejectedData, occurredAt: Date): DomainEvent<PayRequestRejectedData> {
+  return createDomainEvent('payments.PayRequestRejected', data, { occurredAt });
+}

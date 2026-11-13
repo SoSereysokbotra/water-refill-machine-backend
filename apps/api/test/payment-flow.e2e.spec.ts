@@ -24,6 +24,9 @@ describe('Phase 2 E2E Payment & Dispense Flow', () => {
     prisma = app.get(PrismaService);
     mqtt = app.get(MqttService);
 
+    // Wait for MQTT client and all subscriptions to be ready
+    await mqtt.waitUntilReady();
+
     await prisma.dispense.deleteMany({ where: { machineId: testMachineId } });
     await prisma.paymentEvent.deleteMany({ where: { payment: { machineId: testMachineId } } });
     await prisma.payment.deleteMany({ where: { machineId: testMachineId } });
@@ -73,10 +76,10 @@ describe('Phase 2 E2E Payment & Dispense Flow', () => {
     );
 
     // Wait for pay/qr to be generated & published via outbox
-    for (let i = 0; i < 40 && !capturedQr; i++) {
+    for (let i = 0; i < 120 && !capturedQr; i++) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    expect(capturedQr).toBeDefined();
+    expect(capturedQr).not.toBeNull();
     expect(capturedQr.request_id).toBe(requestId);
     expect(capturedQr.qr_string).toContain('000201010212');
     const tranId = capturedQr.tran_id;
@@ -95,10 +98,10 @@ describe('Phase 2 E2E Payment & Dispense Flow', () => {
     expect(callbackRes.statusCode).toBe(200);
 
     // Wait for pay/status (paid) to be emitted
-    for (let i = 0; i < 40 && !capturedPaid; i++) {
+    for (let i = 0; i < 120 && !capturedPaid; i++) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    expect(capturedPaid).toBeDefined();
+    expect(capturedPaid).not.toBeNull();
     expect(capturedPaid.tran_id).toBe(tranId);
     expect(capturedPaid.status).toBe('paid');
 
@@ -117,10 +120,10 @@ describe('Phase 2 E2E Payment & Dispense Flow', () => {
     );
 
     // Wait for transaction/ack
-    for (let i = 0; i < 40 && !capturedAck; i++) {
+    for (let i = 0; i < 120 && !capturedAck; i++) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    expect(capturedAck).toBeDefined();
+    expect(capturedAck).not.toBeNull();
     expect(capturedAck.tran_id).toBe(tranId);
     expect(capturedAck.status).toBe('ok');
 

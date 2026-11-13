@@ -9,6 +9,12 @@ export * from './commands/refund-cases.commands';
 export * from './sweeps/payments.sweep';
 export * from './sweeps/reconcile.sweep';
 export * from './sweeps/dispensing.sweep';
+export * from './public/refund-monitoring.port';
+export {
+  faultReportedEvent,
+  outcomeRejectedEvent,
+  payRequestRejectedEvent,
+} from '../domain/payment.events';
 export type {
   PaymentCreatedData,
   PaymentPaidData,

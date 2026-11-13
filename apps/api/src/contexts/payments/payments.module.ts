@@ -1,7 +1,8 @@
-import { Module, OnModuleInit, Inject } from '@nestjs/common';
+import { Module, OnModuleInit, Inject, Global } from '@nestjs/common';
 import { ConfigService } from '../../platform/config/config.service';
 import { SweepsScheduler } from '../../platform/sweeps/sweeps.scheduler';
 import { SystemClock, TranIdGenerator } from '../../shared-kernel';
+import { PAYMENTS_REFUND_MONITORING } from './application/public/refund-monitoring.port';
 import {
   CancelPaymentHandler,
   ClaimRefundCaseHandler,
@@ -33,6 +34,7 @@ import {
   RefundCasesController,
 } from './interface';
 
+@Global()
 @Module({
   controllers: [PaymentsController, RefundCasesController],
   providers: [
@@ -42,9 +44,14 @@ import {
       useClass: SystemClock,
     },
     SystemClock,
+    PrismaPaymentRepository,
     {
       provide: 'PaymentRepository',
-      useClass: PrismaPaymentRepository,
+      useExisting: PrismaPaymentRepository,
+    },
+    {
+      provide: PAYMENTS_REFUND_MONITORING,
+      useExisting: PrismaPaymentRepository,
     },
     {
       provide: 'MachinePort',
@@ -102,6 +109,7 @@ import {
     PaymentsSweep,
     ReconcileSweep,
     DispensingSweep,
+    PAYMENTS_REFUND_MONITORING,
   ],
 })
 export class PaymentsModule implements OnModuleInit {

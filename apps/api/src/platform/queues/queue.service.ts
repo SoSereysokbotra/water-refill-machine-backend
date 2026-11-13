@@ -83,13 +83,33 @@ export class QueueService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Closing all BullMQ workers and queues...');
     for (const [name, worker] of this.workers.entries()) {
       this.logger.log(`Closing worker [${name}]...`);
-      await worker.close();
+      await Promise.race([
+        worker.close(),
+        new Promise<void>((resolve) =>
+          setTimeout(() => {
+            worker.close(true).catch(() => {});
+            resolve();
+          }, 1500),
+        ),
+      ]);
     }
     for (const queue of this.queues.values()) {
       await queue.close();
     }
     if (this.connection) {
-      await this.connection.quit();
+      try {
+        await Promise.race([
+          this.connection.quit(),
+          new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+        ]);
+      } catch {
+        // ignore
+      }
+      try {
+        this.connection.disconnect();
+      } catch {
+        // ignore
+      }
       this.connection = undefined;
     }
     this.logger.log('All queues and workers closed.');

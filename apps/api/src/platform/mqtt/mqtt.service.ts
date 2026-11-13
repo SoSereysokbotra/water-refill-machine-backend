@@ -17,6 +17,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private client!: mqtt.MqttClient;
   private readonly handlers = new Map<string, MqttMessageHandler[]>();
   private isConnected = false;
+  private pendingSubscriptions: Promise<void> = Promise.resolve();
 
   constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
 
@@ -47,7 +48,7 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     this.client.on('connect', () => {
       this.isConnected = true;
       this.logger.log('Connected to MQTT broker.');
-      this.resubscribeAll();
+      void this.resubscribeAll();
     });
 
     this.client.on('reconnect', () => {
@@ -115,9 +116,11 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
   private subscribeTopic(topic: string): Promise<void> {
     const sharedGroup = this.config.get('MQTT_SHARED_GROUP');
     // If not already a shared subscription and contains wildcards, use shared subscription
-    const fullTopic = topic.startsWith('$share/')
-      ? topic
-      : `$share/${sharedGroup}/${topic}`;
+    const hasWildcards = topic.includes('+') || topic.includes('#');
+    const fullTopic =
+      topic.startsWith('$share/') || !hasWildcards
+        ? topic
+        : `$share/${sharedGroup}/${topic}`;
 
     return new Promise<void>((resolve, reject) => {
       this.client.subscribe(fullTopic, { qos: 1 }, (err) => {
@@ -132,12 +135,24 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  private resubscribeAll(): void {
-    for (const topic of this.handlers.keys()) {
-      void this.subscribeTopic(topic).catch((err: unknown) => {
-        this.logger.error(`Resubscribe error for ${topic}: ${err instanceof Error ? err.message : String(err)}`);
-      });
+  async waitUntilReady(): Promise<void> {
+    for (let i = 0; i < 50; i++) {
+      if (this.isConnected) {
+        await this.pendingSubscriptions;
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
     }
+  }
+
+  private resubscribeAll(): Promise<void> {
+    const promises = Array.from(this.handlers.keys()).map((topic) =>
+      this.subscribeTopic(topic).catch((err: unknown) => {
+        this.logger.error(`Resubscribe error for ${topic}: ${err instanceof Error ? err.message : String(err)}`);
+      }),
+    );
+    this.pendingSubscriptions = Promise.all(promises).then(() => {});
+    return this.pendingSubscriptions;
   }
 
   private async dispatch(topic: string, payload: Buffer): Promise<void> {
@@ -172,7 +187,16 @@ export class MqttService implements OnModuleInit, OnModuleDestroy {
     if (!this.client) return;
     this.logger.log('Disconnecting from MQTT broker...');
     return new Promise<void>((resolve) => {
-      this.client.end(false, {}, () => {
+      const timer = setTimeout(() => {
+        try {
+          this.client?.end(true);
+        } catch {
+          // ignore
+        }
+        resolve();
+      }, 1000);
+      this.client.end(true, {}, () => {
+        clearTimeout(timer);
         this.logger.log('MQTT client closed.');
         resolve();
       });
