@@ -9,6 +9,7 @@ import {
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { BaseError, NotFoundError, ConflictError, ValidationError, RateLimitError, InfrastructureError, toErrorCode } from '../../shared-kernel/errors';
 import { ERROR_CODES, ErrorCode } from '@wrm/contracts';
+import { captureSentryException } from '../telemetry/telemetry.init';
 
 export interface StandardErrorResponse {
   error: {
@@ -89,6 +90,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       }
     } else {
       this.logger.error(`Unhandled exception caught in GlobalExceptionFilter: ${String(exception)}`, exception instanceof Error ? exception.stack : undefined);
+      captureSentryException(exception, { traceId, path: request.url, method: request.method });
     }
 
     const payload: StandardErrorResponse = {

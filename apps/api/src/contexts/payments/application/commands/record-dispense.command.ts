@@ -1,9 +1,10 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { TransactionV1 } from '@wrm/contracts';
 import { Clock, ConflictError, DomainError } from '../../../../shared-kernel';
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
 import { ConfigService } from '../../../../platform/config/config.service';
+import { MetricsService } from '../../../../platform/metrics/metrics.service';
 import { PaymentRepository } from '../../domain/ports/payment.repository';
 import { Dispense } from '../../domain/dispense.entity';
 import { RefundCase } from '../../domain/refund-case.entity';
@@ -27,6 +28,7 @@ export class RecordDispenseHandler {
     @Inject(OutboxService) private readonly outbox: OutboxService,
     @Inject('Clock') private readonly clock: Clock,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Optional() @Inject(MetricsService) private readonly metrics?: MetricsService,
   ) {
     this.maxClockSkewMs = this.config.get('CLOCK_SKEW_MAX_SECONDS') * 1000;
   }
@@ -100,6 +102,10 @@ export class RecordDispenseHandler {
       throw new DomainError('DSP_NOT_PAID', `Cannot record dispense for payment ${payment.tranId} in status ${payment.status}`);
     }
 
+    if (diffPercent !== null) {
+      this.metrics?.observeDispenseAccuracy(diffPercent);
+    }
+
     await this.uow.run(
       async (tx) => {
         const p = await this.repo.get(payment.tranId, tx);
@@ -113,6 +119,8 @@ export class RecordDispenseHandler {
           fault: cmd.data.fault,
           clock: this.clock,
         });
+
+        this.metrics?.paymentStatus(p.status);
 
         const dispense = new Dispense({
           tranId: p.tranId,

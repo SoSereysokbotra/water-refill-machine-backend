@@ -1,10 +1,11 @@
-import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Inject } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger, Inject, Optional } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { QueueService } from '../queues/queue.service';
 import { OutboxHandlerRegistry } from './outbox-handler.registry';
 import { ConfigService } from '../config/config.service';
 import { Queue } from 'bullmq';
 import { DomainEvent } from '../../shared-kernel/domain-event';
+import { TracerService } from '../telemetry/tracer.service';
 
 interface OutboxRow {
   id: string;
@@ -28,6 +29,7 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
     @Inject(QueueService) private readonly queues: QueueService,
     @Inject(OutboxHandlerRegistry) private readonly registry: OutboxHandlerRegistry,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Optional() @Inject(TracerService) private readonly tracer?: TracerService,
   ) {}
 
   private getDispatchQueue(): Queue {
@@ -53,14 +55,27 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
     this.getDispatchQueue();
 
     // Create worker to process dispatched outbox events
-    this.queues.createWorker<{ event: DomainEvent; handlerName: string }>(
+    this.queues.createWorker<{ event: DomainEvent; handlerName: string; traceId?: string }>(
       'outbox.dispatch',
       async (job) => {
-        const { event, handlerName } = job.data;
+        const { event, handlerName, traceId } = job.data;
+        const effectiveTraceId = traceId || (event as unknown as { traceId?: string }).traceId;
         const handlers = this.registry.handlersFor(event.type);
         const match = handlers.find((h) => h.name === handlerName);
         if (match) {
-          await match.handler(event);
+          if (effectiveTraceId && this.tracer) {
+            await this.tracer.startActiveSpan(
+              `outbox.handler.${handlerName}`,
+              async (span) => {
+                span.setAttribute('wrm.event_type', event.type);
+                span.setAttribute('wrm.handler_name', handlerName);
+                await match.handler(event);
+              },
+              { traceId: effectiveTraceId },
+            );
+          } else {
+            await match.handler(event);
+          }
         } else {
           throw new Error(`Handler [${handlerName}] not found for event [${event.type}] on this worker`);
         }
@@ -104,9 +119,11 @@ export class OutboxRelay implements OnModuleInit, OnModuleDestroy {
           } else {
             for (const handler of handlers) {
               const jobId = `${row.id}__${handler.name}`;
+              const payloadWithTrace = row.payload as unknown as { traceId?: string };
+              const traceId = payloadWithTrace?.traceId;
               await this.getDispatchQueue().add(
                 handler.name,
-                { event: row.payload, handlerName: handler.name },
+                { event: row.payload, handlerName: handler.name, traceId },
                 { jobId },
               );
             }

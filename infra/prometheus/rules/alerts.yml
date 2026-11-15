@@ -1,0 +1,160 @@
+groups:
+  - name: wrm_alerts
+    rules:
+      # 1. API Uptime: Down > 1 min
+      - alert: ApiDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WRM API instance is unreachable"
+          description: "Instance {{ $labels.instance }} has been down for more than 1 minute."
+
+      # 2. Payment Success Rate: < 95 % over 15 min
+      - alert: PaymentSuccessRateLow
+        expr: |
+          (sum(rate(wrm_payments_status_total{status="PAID"}[15m]))
+            /
+          (sum(rate(wrm_payments_created_total[15m])) > 0)) * 100 < 95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payment success rate dropped below 95%"
+          description: "Payment success rate over the last 15 minutes is {{ $value | printf \"%.1f\" }}%."
+
+      # 3. ABA Errors / Latency: p95 > 5 s
+      - alert: AbaLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum(rate(wrm_aba_request_duration_seconds_bucket[5m])) by (le)) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ABA PayWay p95 latency exceeds 5 seconds"
+          description: "ABA API p95 response time is currently {{ $value | printf \"%.2f\" }}s."
+
+      # 4. ABA Errors Spike
+      - alert: AbaErrorSpike
+        expr: |
+          sum(rate(wrm_aba_request_duration_seconds_count{outcome="error"}[5m])) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ABA PayWay API error spike detected"
+          description: "ABA API requests are failing with error responses in the last 5 minutes."
+
+      # 5. Outbox Lag: Oldest undispatched event > 30 s
+      - alert: OutboxLagCritical
+        expr: wrm_outbox_lag_seconds > 30
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Transactional outbox relay lag exceeds 30 seconds"
+          description: "Oldest pending outbox event age is {{ $value | printf \"%.1f\" }}s. Events are not being dispatched to queues."
+
+      # 6. Queue Depth: Growing for > 5 min
+      - alert: QueueDepthGrowing
+        expr: deriv(wrm_queue_depth[5m]) > 0 and wrm_queue_depth > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "BullMQ queue depth is accumulating"
+          description: "Queue {{ $labels.queue }} depth is continuously growing over 5 minutes."
+
+      # 7. Sweeps: Stalled (check execution interval)
+      - alert: SweepsStalled
+        expr: time() - wrm_sweep_last_completed_timestamp_seconds > 300
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Background sweep execution stalled"
+          description: "Sweep {{ $labels.sweep }} has not completed for more than 3x its configured interval."
+
+      # 8. ABA Check Failures: > 5 % of checks failing over 10 min
+      - alert: AbaCheckFailuresHigh
+        expr: |
+          (sum(rate(wrm_aba_check_failures_total[10m]))
+            /
+          (sum(rate(wrm_aba_request_duration_seconds_count{operation="check-transaction"}[10m])) > 0)) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High failure rate on ABA check-transaction probes"
+          description: "More than 5% of ABA check-transaction calls are failing."
+
+      # 9. Late Payments: Any late payment detected (reconcile/callback)
+      - alert: LatePaymentDetected
+        expr: increase(wrm_late_payments_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Late payment detected after expiration or cancellation"
+          description: "A customer paid after payment expired or cancelled. A refund review case was opened automatically."
+
+      # 10. Machines Offline: Any machine offline > 3 min
+      - alert: MachineOffline
+        expr: wrm_machines_online < 1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Machine offline for more than 3 minutes"
+          description: "Machine is offline or unresponsive."
+
+      # 11. Pending Outcomes: Machine reports pending_outcomes > 0 for > 1 h
+      - alert: PendingOutcomesStuck
+        expr: wrm_pending_outcomes > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kiosk has pending outcomes stuck in NVS queue for > 1 hour"
+          description: "Machine {{ $labels.machine }} has {{ $value }} unacknowledged outcomes in storage."
+
+      # 12. Dispense Unknown: Any payment in DISPENSE_UNKNOWN
+      - alert: DispenseOutcomeUnknown
+        expr: wrm_dispense_unknown_open > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payment in DISPENSE_UNKNOWN status"
+          description: "There are {{ $value }} payments where dispensing outcome was not confirmed within timeout."
+
+      # 13. Refund Cases: Any case open > 24 h
+      - alert: RefundCaseStale
+        expr: wrm_refund_cases_open > 0
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unresolved refund cases pending for > 24 hours"
+          description: "Open refund cases have remained unaddressed by operators for over 24 hours."
+
+      # 14. Rejected Outcomes: Any transaction/ack rejected
+      - alert: OutcomeRejected
+        expr: increase(wrm_transaction_ack_total{status="rejected"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dispense outcome rejected by backend"
+          description: "A machine submitted an invalid or mismatched dispense outcome that was rejected."
+
+      # 15. Host Resources: CPU / memory > 80 %
+      - alert: HostResourcesHigh
+        expr: (rate(wrm_node_process_cpu_user_seconds_total[1m]) + rate(wrm_node_process_cpu_system_seconds_total[1m])) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High backend CPU utilization (> 80%)"
+          description: "Backend process CPU usage has exceeded 80% for 5 minutes."

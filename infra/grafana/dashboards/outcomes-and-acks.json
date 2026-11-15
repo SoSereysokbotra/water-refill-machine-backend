@@ -1,0 +1,71 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Dispensing Quality & Outcomes",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1 },
+      "id": 2,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "histogram_quantile(0.95, sum(rate(wrm_dispense_accuracy_diff_percent_bucket[15m])) by (le))",
+          "legendFormat": "p95 Sensor Discrepancy",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "histogram_quantile(0.50, sum(rate(wrm_dispense_accuracy_diff_percent_bucket[15m])) by (le))",
+          "legendFormat": "p50 Sensor Discrepancy",
+          "refId": "B"
+        }
+      ],
+      "title": "Dispense Accuracy Difference (|Flow - Weight| / Target %)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1 },
+      "id": 3,
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "increase(wrm_transaction_ack_total{status=\"rejected\"}[1h])",
+          "legendFormat": "Rejected Outcomes (DSP_REJECT)",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "increase(wrm_transaction_ack_total{status=\"ok\"}[1h])",
+          "legendFormat": "Accepted Outcomes",
+          "refId": "B"
+        }
+      ],
+      "title": "Outcome Ingestion ACKs (OK vs Rejected)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["wrm", "dispensing", "quality"],
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "WRM - Outcomes & ACKs",
+  "uid": "wrm-outcomes",
+  "version": 1
+}

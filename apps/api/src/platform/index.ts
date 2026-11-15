@@ -38,6 +38,13 @@ export * from './health/health.controller';
 export * from './health/health.module';
 
 export * from './telemetry/telemetry.init';
+export * from './telemetry/tracer.service';
+export * from './telemetry/telemetry.module';
+
+export * from './metrics/metrics.service';
+export * from './metrics/metrics-collector.service';
+export * from './metrics/metrics.controller';
+export * from './metrics/metrics.module';
 
 export * from './security/access.guards';
 

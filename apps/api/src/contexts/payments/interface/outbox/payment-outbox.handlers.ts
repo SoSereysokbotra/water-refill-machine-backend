@@ -1,7 +1,8 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { DomainEvent } from '../../../../shared-kernel/domain-event';
 import { OutboxHandlerRegistry } from '../../../../platform/outbox/outbox-handler.registry';
 import { MqttService } from '../../../../platform/mqtt/mqtt.service';
+import { TracerService } from '../../../../platform/telemetry/tracer.service';
 import { buildMachineTopic, MQTT_TOPICS } from '@wrm/contracts';
 import {
   PaymentCancelledData,
@@ -18,6 +19,7 @@ export class PaymentOutboxHandlers implements OnModuleInit {
   constructor(
     @Inject(OutboxHandlerRegistry) private readonly registry: OutboxHandlerRegistry,
     @Inject(MqttService) private readonly mqtt: MqttService,
+    @Optional() @Inject(TracerService) private readonly tracer?: TracerService,
   ) {}
 
   onModuleInit(): void {
@@ -53,45 +55,67 @@ export class PaymentOutboxHandlers implements OnModuleInit {
   }
 
   async handlePaymentCreated(event: DomainEvent<PaymentCreatedData>): Promise<void> {
-    const data = event.data;
-    const topic = buildMachineTopic(data.machineId, MQTT_TOPICS.PAY_QR);
-    const amount = data.currency === 'USD' ? data.amountMinor / 100 : data.amountMinor;
+    const publish = async () => {
+      const data = event.data;
+      const topic = buildMachineTopic(data.machineId, MQTT_TOPICS.PAY_QR);
+      const amount = data.currency === 'USD' ? data.amountMinor / 100 : data.amountMinor;
 
-    const payload = {
-      v: 1,
-      request_id: data.requestId,
-      tran_id: data.tranId,
-      qr_string: data.qrString,
-      amount,
-      currency: data.currency,
-      volume_ml: data.volumeMl,
-      expires_at: data.expiresAt,
+      const payload = {
+        v: 1,
+        request_id: data.requestId,
+        tran_id: data.tranId,
+        qr_string: data.qrString,
+        amount,
+        currency: data.currency,
+        volume_ml: data.volumeMl,
+        expires_at: data.expiresAt,
+      };
+
+      const remainingSec = Math.max(
+        1,
+        Math.floor((new Date(data.expiresAt).getTime() - Date.now()) / 1000),
+      );
+
+      this.logger.log(`Publishing pay/qr for ${data.tranId} to ${topic} (expires in ${remainingSec}s)`);
+      await this.mqtt.publish(topic, payload, {
+        qos: 1,
+        messageExpiryInterval: remainingSec,
+      });
     };
 
-    const remainingSec = Math.max(
-      1,
-      Math.floor((new Date(data.expiresAt).getTime() - Date.now()) / 1000),
-    );
-
-    this.logger.log(`Publishing pay/qr for ${data.tranId} to ${topic} (expires in ${remainingSec}s)`);
-    await this.mqtt.publish(topic, payload, {
-      qos: 1,
-      messageExpiryInterval: remainingSec,
-    });
+    if (this.tracer) {
+      return this.tracer.startActiveSpan('mqtt.publish_pay_qr', async (span) => {
+        span.setAttribute('wrm.tran_id', event.data.tranId);
+        span.setAttribute('wrm.machine_id', event.data.machineId);
+        return publish();
+      }, { traceId: event.traceId });
+    }
+    return publish();
   }
 
   async handlePaymentPaid(event: DomainEvent<PaymentPaidData>): Promise<void> {
-    const data = event.data;
-    const topic = buildMachineTopic(data.machineId, MQTT_TOPICS.PAY_STATUS);
+    const publish = async () => {
+      const data = event.data;
+      const topic = buildMachineTopic(data.machineId, MQTT_TOPICS.PAY_STATUS);
 
-    const payload = {
-      v: 1,
-      tran_id: data.tranId,
-      status: 'paid',
+      const payload = {
+        v: 1,
+        tran_id: data.tranId,
+        status: 'paid',
+      };
+
+      this.logger.log(`Publishing pay/status [paid] for ${data.tranId} to ${topic}`);
+      await this.mqtt.publish(topic, payload, { qos: 1 });
     };
 
-    this.logger.log(`Publishing pay/status [paid] for ${data.tranId} to ${topic}`);
-    await this.mqtt.publish(topic, payload, { qos: 1 });
+    if (this.tracer) {
+      return this.tracer.startActiveSpan('mqtt.publish_pay_status', async (span) => {
+        span.setAttribute('wrm.tran_id', event.data.tranId);
+        span.setAttribute('wrm.machine_id', event.data.machineId);
+        return publish();
+      }, { traceId: event.traceId });
+    }
+    return publish();
   }
 
   async handlePaymentExpired(event: DomainEvent<PaymentExpiredData>): Promise<void> {

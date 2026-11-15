@@ -9,6 +9,8 @@ import { SweepsModule } from './sweeps/sweeps.module';
 import { MqttModule } from './mqtt/mqtt.module';
 import { RateLimitModule } from './rate-limit/rate-limit.module';
 import { HealthModule } from './health/health.module';
+import { TelemetryModule } from './telemetry/telemetry.module';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { HealthModule } from './health/health.module';
     MqttModule,
     RateLimitModule,
     HealthModule,
+    TelemetryModule,
+    MetricsModule,
   ],
   exports: [
     ConfigModule,
@@ -34,6 +38,8 @@ import { HealthModule } from './health/health.module';
     MqttModule,
     RateLimitModule,
     HealthModule,
+    TelemetryModule,
+    MetricsModule,
   ],
 })
 export class PlatformModule {}

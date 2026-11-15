@@ -1,8 +1,9 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { Clock, ConflictError, DomainError, TranIdGenerator } from '../../../../shared-kernel';
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
 import { ConfigService } from '../../../../platform/config/config.service';
+import { MetricsService } from '../../../../platform/metrics/metrics.service';
 import { Payment } from '../../domain/payment.aggregate';
 import { PaymentRepository } from '../../domain/ports/payment.repository';
 import { DuplicateTranIdError, PaymentGateway } from '../../domain/ports/payment-gateway.port';
@@ -35,6 +36,7 @@ export class CreatePaymentHandler {
     @Inject('Clock') private readonly clock: Clock,
     @Inject(TranIdGenerator) private readonly tranIds: TranIdGenerator,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Optional() @Inject(MetricsService) private readonly metrics?: MetricsService,
   ) {
     this.ttlMinutes = this.config.get('PAYMENT_TTL_MINUTES');
   }
@@ -109,6 +111,9 @@ export class CreatePaymentHandler {
         for (const tranId of supersededTranIds) {
           await this.gateway.closeTransaction(tranId).catch(() => {});
         }
+
+        this.metrics?.paymentCreated(machine.id, machine.currency);
+        this.metrics?.paymentStatus('PENDING');
 
         return { action: 'created', payment };
       } catch (err: unknown) {

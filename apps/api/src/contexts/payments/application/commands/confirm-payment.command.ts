@@ -1,8 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { Clock, ConflictError } from '../../../../shared-kernel';
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
 import { ConfigService } from '../../../../platform/config/config.service';
+import { MetricsService } from '../../../../platform/metrics/metrics.service';
 import { PaymentRepository } from '../../domain/ports/payment.repository';
 import { RefundCase } from '../../domain/refund-case.entity';
 import { calculateSuggestedRefund } from '../../domain/refund-policy';
@@ -25,6 +26,7 @@ export class ConfirmPaymentHandler {
     @Inject(OutboxService) private readonly outbox: OutboxService,
     @Inject('Clock') private readonly clock: Clock,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Optional() @Inject(MetricsService) private readonly metrics?: MetricsService,
   ) {
     this.graceSeconds = this.config.get('PAYMENT_GRACE_SECONDS');
   }
@@ -36,9 +38,19 @@ export class ConfirmPaymentHandler {
         const before = payment.status;
         payment.markPaid(this.clock, this.graceSeconds, cmd.abaApv, cmd.foundBy);
 
+        if (payment.status === 'PAID') {
+          this.metrics?.paymentStatus('PAID');
+          if (payment.paidAt && payment.createdAt) {
+            const timeToPaid = Math.max(0, (payment.paidAt.getTime() - payment.createdAt.getTime()) / 1000);
+            this.metrics?.observePaymentTimeToPaid(timeToPaid);
+          }
+        }
+
         // C1: a late payment (after EXPIRED/CANCELLED/FAILED or past grace) goes to refund review.
         // Every REFUND_REVIEW needs a refund case, otherwise it can never be claimed or refunded.
         if (before !== 'REFUND_REVIEW' && payment.status === 'REFUND_REVIEW') {
+          this.metrics?.paymentStatus('REFUND_REVIEW');
+          this.metrics?.latePaymentDetected();
           const existing = await this.repo.getRefundCase(payment.tranId, tx);
           if (!existing) {
             const now = this.clock.now();

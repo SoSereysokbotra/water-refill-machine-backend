@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import {
   buildMachineTopic,
   ErrorV1Schema,
@@ -13,6 +13,8 @@ import { ConfigService } from '../../../../platform/config/config.service';
 import { RateLimiterService } from '../../../../platform/rate-limit/rate-limiter.service';
 import { UnitOfWork } from '../../../../platform/database/unit-of-work';
 import { OutboxService } from '../../../../platform/outbox/outbox.service';
+import { MetricsService } from '../../../../platform/metrics/metrics.service';
+import { TracerService } from '../../../../platform/telemetry/tracer.service';
 import {
   CancelPaymentCommand,
   CancelPaymentHandler,
@@ -40,6 +42,8 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(UnitOfWork) private readonly uow: UnitOfWork,
     @Inject(OutboxService) private readonly outbox: OutboxService,
+    @Optional() @Inject(MetricsService) private readonly metrics?: MetricsService,
+    @Optional() @Inject(TracerService) private readonly tracer?: TracerService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -64,64 +68,76 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     const machineId = parts[1];
     if (!machineId) return;
 
-    const raw = this.parseJson(payload);
-    const parsed = parsePayRequestPayload(raw);
-    if (!parsed.success) {
-      this.logger.warn(`Invalid pay/request from ${machineId}: ${JSON.stringify(raw)}`);
-      await this.publishStatus(machineId, null, 'failed', 'VALIDATION_FAILED');
-      return;
-    }
-
-    const { request_id, volume_ml } = parsed.data;
-
-    try {
-      // B5: at most PAY_REQUEST_BURST requests per PAY_REQUEST_MIN_INTERVAL_MS window per machine
-      await this.limiter.consume(`pay:${machineId}`, 1, {
-        points: this.config.get('PAY_REQUEST_BURST'),
-        duration: Math.max(1, Math.ceil(this.config.get('PAY_REQUEST_MIN_INTERVAL_MS') / 1000)),
-        keyPrefix: 'rl_pay',
-      });
-    } catch {
-      this.logger.warn(`Rate limit exceeded for machine ${machineId} on pay/request`);
-      await this.publishStatus(machineId, null, 'failed', 'RATE_LIMITED', request_id);
-      await this.raisePayRequestRejected(machineId, 'RATE_LIMITED');
-      return;
-    }
-
-    try {
-      const result = await this.createPaymentHandler.execute(
-        new CreatePaymentCommand(machineId, request_id, volume_ml),
-      );
-
-      if (result.action === 'republish_qr') {
-        const remainingSec = Math.max(
-          1,
-          Math.floor((result.payment.expiresAt.getTime() - Date.now()) / 1000),
-        );
-        const amount = result.payment.currency === 'USD' ? result.payment.amountMinor / 100 : result.payment.amountMinor;
-        await this.mqtt.publish(
-          buildMachineTopic(machineId, MQTT_TOPICS.PAY_QR),
-          {
-            v: 1,
-            request_id: result.payment.requestId,
-            tran_id: result.payment.tranId,
-            qr_string: result.payment.qrString,
-            amount,
-            currency: result.payment.currency,
-            volume_ml: result.payment.volumeMl,
-            expires_at: result.payment.expiresAt,
-          },
-          { qos: 1, messageExpiryInterval: remainingSec },
-        );
-      } else if (result.action === 'status') {
-        await this.publishStatus(machineId, result.payment.tranId, result.status as any, undefined, result.payment.requestId);
+    const runFlow = async () => {
+      const raw = this.parseJson(payload);
+      const parsed = parsePayRequestPayload(raw);
+      if (!parsed.success) {
+        this.logger.warn(`Invalid pay/request from ${machineId}: ${JSON.stringify(raw)}`);
+        await this.publishStatus(machineId, null, 'failed', 'VALIDATION_FAILED');
+        return;
       }
-    } catch (err: unknown) {
-      const code = toErrorCode(err);
-      this.logger.error(`Error processing pay/request for machine ${machineId}: ${code}`);
-      await this.publishStatus(machineId, null, 'failed', code, request_id);
-      await this.raisePayRequestRejected(machineId, code);
+
+      const { request_id, volume_ml } = parsed.data;
+
+      try {
+        // B5: at most PAY_REQUEST_BURST requests per PAY_REQUEST_MIN_INTERVAL_MS window per machine
+        await this.limiter.consume(`pay:${machineId}`, 1, {
+          points: this.config.get('PAY_REQUEST_BURST'),
+          duration: Math.max(1, Math.ceil(this.config.get('PAY_REQUEST_MIN_INTERVAL_MS') / 1000)),
+          keyPrefix: 'rl_pay',
+        });
+      } catch {
+        this.logger.warn(`Rate limit exceeded for machine ${machineId} on pay/request`);
+        this.metrics?.payRequestThrottled();
+        await this.publishStatus(machineId, null, 'failed', 'RATE_LIMITED', request_id);
+        await this.raisePayRequestRejected(machineId, 'RATE_LIMITED');
+        return;
+      }
+
+      try {
+        const result = await this.createPaymentHandler.execute(
+          new CreatePaymentCommand(machineId, request_id, volume_ml),
+        );
+
+        if (result.action === 'republish_qr') {
+          const remainingSec = Math.max(
+            1,
+            Math.floor((result.payment.expiresAt.getTime() - Date.now()) / 1000),
+          );
+          const amount = result.payment.currency === 'USD' ? result.payment.amountMinor / 100 : result.payment.amountMinor;
+          await this.mqtt.publish(
+            buildMachineTopic(machineId, MQTT_TOPICS.PAY_QR),
+            {
+              v: 1,
+              request_id: result.payment.requestId,
+              tran_id: result.payment.tranId,
+              qr_string: result.payment.qrString,
+              amount,
+              currency: result.payment.currency,
+              volume_ml: result.payment.volumeMl,
+              expires_at: result.payment.expiresAt,
+            },
+            { qos: 1, messageExpiryInterval: remainingSec },
+          );
+        } else if (result.action === 'status') {
+          await this.publishStatus(machineId, result.payment.tranId, result.status as any, undefined, result.payment.requestId);
+        }
+      } catch (err: unknown) {
+        const code = toErrorCode(err);
+        this.logger.error(`Error processing pay/request for machine ${machineId}: ${code}`);
+        await this.publishStatus(machineId, null, 'failed', code, request_id);
+        await this.raisePayRequestRejected(machineId, code);
+      }
+    };
+
+    if (this.tracer) {
+      return this.tracer.startActiveSpan('mqtt.pay_request', async (span) => {
+        span.setAttribute('wrm.machine_id', machineId);
+        return runFlow();
+      });
     }
+
+    return runFlow();
   }
 
   async onPayCancel(topic: string, payload: Buffer): Promise<void> {
@@ -266,6 +282,7 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     reason?: string,
     requestId?: string,
   ): Promise<void> {
+    this.metrics?.paymentStatus(status.toUpperCase());
     await this.mqtt.publish(
       buildMachineTopic(machineId, MQTT_TOPICS.PAY_STATUS),
       {
@@ -285,6 +302,7 @@ export class PaymentsMqttConsumer implements OnModuleInit {
     status: 'ok' | 'rejected',
     reason?: string,
   ): Promise<void> {
+    this.metrics?.transactionAck(status);
     await this.mqtt.publish(
       buildMachineTopic(machineId, MQTT_TOPICS.TRANSACTION_ACK),
       {

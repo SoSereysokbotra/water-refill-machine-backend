@@ -1,6 +1,8 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import crypto from 'node:crypto';
 import { ConfigService } from '../../../../platform/config/config.service';
+import { MetricsService } from '../../../../platform/metrics/metrics.service';
+import { TracerService } from '../../../../platform/telemetry/tracer.service';
 import { Currency } from '../../domain/payment.types';
 import {
   CheckTransactionResult,
@@ -28,15 +30,21 @@ export class PayWayGatewayAdapter implements PaymentGateway {
   private readonly apiKey: string;
   private readonly callbackUrl: string;
 
-  constructor(@Inject(ConfigService) private readonly config: ConfigService) {
+  constructor(
+    @Inject(ConfigService) private readonly config: ConfigService,
+    @Optional() @Inject(MetricsService) private readonly metrics?: MetricsService,
+    @Optional() @Inject(TracerService) private readonly tracer?: TracerService,
+  ) {
     this.baseUrl = this.config.get('PAYWAY_BASE_URL').replace(/\/+$/, '');
     this.merchantId = this.config.get('PAYWAY_MERCHANT_ID');
     this.apiKey = this.config.get('PAYWAY_API_KEY');
     this.callbackUrl = this.config.get('PAYWAY_CALLBACK_URL') || '';
   }
 
-  private async postJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
+  private async postJson<T>(path: string, body: Record<string, unknown>, operation = 'unknown'): Promise<T> {
     const url = `${this.baseUrl}${path}`;
+    const start = Date.now();
+    let outcome: 'ok' | 'error' = 'ok';
     let res: Response;
     try {
       res = await fetch(url, {
@@ -46,19 +54,25 @@ export class PayWayGatewayAdapter implements PaymentGateway {
         signal: AbortSignal.timeout(8000), // 8 s timeout per D7 / C10
       });
     } catch (err: unknown) {
+      outcome = 'error';
+      this.metrics?.observeAbaRequest(operation, outcome, (Date.now() - start) / 1000);
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.warn(`PayWay request failed to ${path}: ${msg}`);
       throw new GatewayUnavailableError(`PayWay network error: ${msg}`);
     }
 
+    const durationSec = (Date.now() - start) / 1000;
     const text = await res.text();
     let json: any;
     try {
       json = JSON.parse(text);
     } catch {
+      outcome = 'error';
+      this.metrics?.observeAbaRequest(operation, outcome, durationSec);
       throw new GatewayUnavailableError(`PayWay returned non-JSON (HTTP ${res.status}): ${text.slice(0, 200)}`);
     }
 
+    this.metrics?.observeAbaRequest(operation, outcome, durationSec);
     return json as T;
   }
 
@@ -120,27 +134,40 @@ export class PayWayGatewayAdapter implements PaymentGateway {
     }
     body.hash = hash;
 
-    const json = await this.postJson<any>('/api/payment-gateway/v1/payments/generate-qr', body);
-    const code = String(json?.status?.code ?? '');
+    const executeCall = async () => {
+      const json = await this.postJson<any>('/api/payment-gateway/v1/payments/generate-qr', body, 'generate-qr');
+      const code = String(json?.status?.code ?? '');
 
-    if (code === '0') {
-      return {
-        qrString: json.qrString,
-        qrMd5: json.qrImageMd5 ?? json.qrMd5,
-        qrImage: json.qrImage,
-        deeplink: json.abapay_deeplink,
-      };
+      if (code === '0') {
+        return {
+          qrString: json.qrString,
+          qrMd5: json.qrImageMd5 ?? json.qrMd5,
+          qrImage: json.qrImage,
+          deeplink: json.abapay_deeplink,
+        };
+      }
+
+      if (code === '403') {
+        throw new DuplicateTranIdError(`Duplicate tran_id: ${json?.status?.message ?? ''}`);
+      }
+
+      if (code === '8' || code === '429') {
+        throw new GatewayUnavailableError(`PayWay unavailable (code ${code}): ${json?.status?.message ?? ''}`);
+      }
+
+      throw new GatewayRejectedError(`PayWay rejected generate-qr (code ${code}): ${json?.status?.message ?? ''}`, json);
+    };
+
+    if (this.tracer) {
+      return this.tracer.startActiveSpan('aba.generate_qr', async (span) => {
+        span.setAttribute('wrm.tran_id', input.tranId);
+        span.setAttribute('wrm.amount', input.amount);
+        span.setAttribute('wrm.currency', input.currency);
+        return executeCall();
+      });
     }
 
-    if (code === '403') {
-      throw new DuplicateTranIdError(`Duplicate tran_id: ${json?.status?.message ?? ''}`);
-    }
-
-    if (code === '8' || code === '429') {
-      throw new GatewayUnavailableError(`PayWay unavailable (code ${code}): ${json?.status?.message ?? ''}`);
-    }
-
-    throw new GatewayRejectedError(`PayWay rejected generate-qr (code ${code}): ${json?.status?.message ?? ''}`, json);
+    return executeCall();
   }
 
   async checkTransaction(tranId: string): Promise<CheckTransactionResult> {
@@ -154,52 +181,76 @@ export class PayWayGatewayAdapter implements PaymentGateway {
       hash,
     };
 
-    const json = await this.postJson<any>('/api/payment-gateway/v1/payments/check-transaction-2', body);
-    const code = String(json?.status?.code ?? '');
+    const executeCall = async (): Promise<CheckTransactionResult> => {
+      let json: any;
+      try {
+        json = await this.postJson<any>('/api/payment-gateway/v1/payments/check-transaction-2', body, 'check-transaction');
+      } catch (err) {
+        this.metrics?.abaCheckFailure();
+        throw err;
+      }
 
-    // Per D7 / C10.3: code 6 means transaction not found yet -> customer has not paid
-    if (code === '6') {
-      return { status: 'not_found', raw: json };
-    }
+      const code = String(json?.status?.code ?? '');
 
-    if (code === '11' || code === '429') {
-      throw new GatewayUnavailableError(`PayWay unavailable (code ${code}): ${json?.status?.message ?? ''}`);
-    }
+      // Per D7 / C10.3: code 6 means transaction not found yet -> customer has not paid
+      if (code === '6') {
+        return { status: 'not_found', raw: json };
+      }
 
-    if (code !== '00' && code !== '0') {
-      throw new GatewayRejectedError(`PayWay rejected check-transaction (code ${code}): ${json?.status?.message ?? ''}`, json);
-    }
+      if (code === '11' || code === '429') {
+        this.metrics?.abaCheckFailure();
+        throw new GatewayUnavailableError(`PayWay unavailable (code ${code}): ${json?.status?.message ?? ''}`);
+      }
 
-    const psc = Number(json?.data?.payment_status_code);
-    const paymentStatus = json?.data?.payment_status;
-    const apv = json?.data?.apv ?? json?.data?.approval_code;
+      if (code !== '00' && code !== '0') {
+        this.metrics?.abaCheckFailure();
+        throw new GatewayRejectedError(`PayWay rejected check-transaction (code ${code}): ${json?.status?.message ?? ''}`, json);
+      }
 
-    if (psc === 0) {
-      return { status: 'approved', paymentStatusCode: psc, paymentStatus, apv, raw: json };
-    }
-    if (psc === 2) {
+      const psc = Number(json?.data?.payment_status_code);
+      const paymentStatus = json?.data?.payment_status;
+      const apv = json?.data?.apv ?? json?.data?.approval_code;
+
+      if (psc === 0) {
+        return { status: 'approved', paymentStatusCode: psc, paymentStatus, apv, raw: json };
+      }
+      if (psc === 2) {
+        return { status: 'pending', paymentStatusCode: psc, paymentStatus, raw: json };
+      }
+      if (psc === 3 || psc === 7) {
+        return { status: 'declined', paymentStatusCode: psc, paymentStatus, raw: json };
+      }
+      if (psc === 4) {
+        return { status: 'refunded', paymentStatusCode: psc, paymentStatus, raw: json };
+      }
+
       return { status: 'pending', paymentStatusCode: psc, paymentStatus, raw: json };
-    }
-    if (psc === 3 || psc === 7) {
-      return { status: 'declined', paymentStatusCode: psc, paymentStatus, raw: json };
-    }
-    if (psc === 4) {
-      return { status: 'refunded', paymentStatusCode: psc, paymentStatus, raw: json };
+    };
+
+    if (this.tracer) {
+      return this.tracer.startActiveSpan('aba.check_transaction', async (span) => {
+        span.setAttribute('wrm.tran_id', tranId);
+        return executeCall();
+      });
     }
 
-    return { status: 'pending', paymentStatusCode: psc, paymentStatus, raw: json };
+    return executeCall();
   }
 
   async closeTransaction(tranId: string): Promise<void> {
     try {
       const time = reqTime();
       const hash = sign(`${time}${this.merchantId}${tranId}`, this.apiKey);
-      await this.postJson<any>('/api/payment-gateway/v1/payments/close-transaction', {
-        req_time: time,
-        merchant_id: this.merchantId,
-        tran_id: tranId,
-        hash,
-      });
+      await this.postJson<any>(
+        '/api/payment-gateway/v1/payments/close-transaction',
+        {
+          req_time: time,
+          merchant_id: this.merchantId,
+          tran_id: tranId,
+          hash,
+        },
+        'close-transaction',
+      );
     } catch (err: unknown) {
       // Close transaction is best-effort until confirmed by ABA (C10.5)
       this.logger.debug(`closeTransaction for ${tranId} completed with note: ${err instanceof Error ? err.message : String(err)}`);
