@@ -1,7 +1,7 @@
-import { Body, Controller, Get, Inject, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Optional, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { AdminKeyGuard } from '../../../../platform/security/access.guards';
 import { ConfigService } from '../../../../platform/config/config.service';
+import { SessionAuthGuard, RolesGuard, Roles, CurrentUser, AuthenticatedUser } from '../../../../platform/security';
 import { ValidationError } from '../../../../shared-kernel';
 import {
   ClaimRefundCaseCommand,
@@ -16,24 +16,31 @@ import {
   ResolveUnknownDispenseCommand,
   ResolveUnknownDispenseHandler,
 } from '../../application';
+import { AUDIT_LOGGER_PORT, AuditLoggerPort } from '../../../identity/application/public/audit-logger.port';
 
-// Until Phase 6 there is no login: the operator identifies themselves with actorId (required, so
-// the claim lock can tell operators apart).
 const ActorId = z.string().trim().min(1).max(64);
 const Reason = z.string().trim().min(1).max(500);
 
-const ListQuery = z.object({ status: z.enum(['open', 'claimed', 'refunded', 'rejected', 'auto_failed']).optional() });
-const ClaimBody = z.object({ actorId: ActorId });
+const ListQuery = z.object({
+  status: z.enum(['open', 'claimed', 'refunded', 'rejected', 'auto_failed']).optional(),
+});
+const ClaimBody = z.object({
+  actorId: ActorId.optional(),
+  durationMinutes: z.number().int().min(1).max(120).optional(),
+});
 const MarkRefundedBody = z.object({
-  actorId: ActorId,
-  method: z.string().trim().min(1).max(32),
+  actorId: ActorId.optional(),
+  method: z.string().trim().min(1).max(64),
   reference: z.string().trim().min(1).max(128),
   amountMinor: z.number().int().positive(),
   adminOverrideReason: Reason.optional(),
 });
-const DecisionBody = z.object({ actorId: ActorId, reason: Reason });
+const DecisionBody = z.object({
+  actorId: ActorId.optional(),
+  reason: Reason,
+});
 const ResolveUnknownBody = z.object({
-  actorId: ActorId,
+  actorId: ActorId.optional(),
   resolution: z.enum(['dispensed', 'refund']),
   reason: Reason,
   adminOverrideReason: Reason.optional(),
@@ -50,9 +57,9 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   return result.data;
 }
 
-// Operator/admin endpoints: local-only or X-Admin-Key until Phase 6 (Plan §C7)
+/** Operator/admin endpoints protected by SessionAuthGuard and RolesGuard (Plan §C7). */
 @Controller('v1')
-@UseGuards(AdminKeyGuard)
+@UseGuards(SessionAuthGuard, RolesGuard)
 export class RefundCasesController {
   constructor(
     @Inject('PaymentRepository') private readonly repo: PaymentRepository,
@@ -62,9 +69,11 @@ export class RefundCasesController {
     @Inject(ReopenRefundHandler) private readonly reopenHandler: ReopenRefundHandler,
     @Inject(ResolveUnknownDispenseHandler) private readonly resolveUnknownHandler: ResolveUnknownDispenseHandler,
     @Inject(ConfigService) private readonly config: ConfigService,
+    @Optional() @Inject(AUDIT_LOGGER_PORT) private readonly audit?: AuditLoggerPort,
   ) {}
 
   @Get('refund-cases')
+  @Roles('operator')
   async listRefundCases(@Query() query: unknown) {
     const { status } = parse(ListQuery, query);
     const cases = await this.repo.findRefundCases({ status, limit: 100 });
@@ -72,50 +81,126 @@ export class RefundCasesController {
   }
 
   @Get('refund-cases/:tranId')
+  @Roles('operator')
   async getRefundCase(@Param('tranId') tranId: string) {
     const rc = await this.repo.getRefundCase(tranId);
     return { data: rc };
   }
 
   @Post('refund-cases/:tranId/claim')
-  async claimRefundCase(@Param('tranId') tranId: string, @Body() body: unknown) {
-    const { actorId } = parse(ClaimBody, body);
-    // C7: a claim lasts REFUND_CLAIM_MINUTES (config), not a client-chosen duration
+  @Roles('operator')
+  async claimRefundCase(
+    @Param('tranId') tranId: string,
+    @Body() body: unknown,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
+    const parsed = parse(ClaimBody, body);
+    const actorId = parsed.actorId ?? user?.id ?? 'system';
     const res = await this.claimHandler.execute(
       new ClaimRefundCaseCommand(tranId, actorId, this.config.get('REFUND_CLAIM_MINUTES')),
     );
+
+    await this.audit?.record({
+      actorId,
+      action: 'refund.claim',
+      entityType: 'refund_case',
+      entityId: tranId,
+    });
+
     return { data: res };
   }
 
   @Post('refund-cases/:tranId/mark-refunded')
-  async markRefunded(@Param('tranId') tranId: string, @Body() body: unknown) {
+  @Roles('admin')
+  async markRefunded(
+    @Param('tranId') tranId: string,
+    @Body() body: unknown,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
     const b = parse(MarkRefundedBody, body);
+    const actorId = b.actorId ?? user?.id ?? 'system';
     const res = await this.markRefundedHandler.execute(
-      new MarkRefundedCommand(tranId, b.actorId, b.method, b.reference, b.amountMinor, b.adminOverrideReason),
+      new MarkRefundedCommand(tranId, actorId, b.method, b.reference, b.amountMinor, b.adminOverrideReason),
     );
+
+    await this.audit?.record({
+      actorId,
+      action: 'refund.mark_refunded',
+      entityType: 'refund_case',
+      entityId: tranId,
+      after: { method: b.method, reference: b.reference, amountMinor: b.amountMinor },
+      reason: b.adminOverrideReason,
+    });
+
     return { data: res };
   }
 
   @Post('refund-cases/:tranId/reject')
-  async rejectRefund(@Param('tranId') tranId: string, @Body() body: unknown) {
+  @Roles('admin')
+  async rejectRefund(
+    @Param('tranId') tranId: string,
+    @Body() body: unknown,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
     const b = parse(DecisionBody, body);
-    const res = await this.rejectHandler.execute(new RejectRefundCommand(tranId, b.actorId, b.reason));
+    const actorId = b.actorId ?? user?.id ?? 'system';
+    const res = await this.rejectHandler.execute(new RejectRefundCommand(tranId, actorId, b.reason));
+
+    await this.audit?.record({
+      actorId,
+      action: 'refund.reject',
+      entityType: 'refund_case',
+      entityId: tranId,
+      reason: b.reason,
+    });
+
     return { data: res };
   }
 
   @Post('refund-cases/:tranId/reopen')
-  async reopenRefund(@Param('tranId') tranId: string, @Body() body: unknown) {
+  @Roles('admin')
+  async reopenRefund(
+    @Param('tranId') tranId: string,
+    @Body() body: unknown,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
     const b = parse(DecisionBody, body);
-    const res = await this.reopenHandler.execute(new ReopenRefundCommand(tranId, b.actorId, b.reason));
+    const actorId = b.actorId ?? user?.id ?? 'system';
+    const res = await this.reopenHandler.execute(new ReopenRefundCommand(tranId, actorId, b.reason));
+
+    await this.audit?.record({
+      actorId,
+      action: 'refund.reopen',
+      entityType: 'refund_case',
+      entityId: tranId,
+      reason: b.reason,
+    });
+
     return { data: res };
   }
 
   @Post('payments/:tranId/resolve-unknown')
-  async resolveUnknown(@Param('tranId') tranId: string, @Body() body: unknown) {
+  @Roles('admin')
+  async resolveUnknown(
+    @Param('tranId') tranId: string,
+    @Body() body: unknown,
+    @CurrentUser() user?: AuthenticatedUser,
+  ) {
     const b = parse(ResolveUnknownBody, body);
+    const actorId = b.actorId ?? user?.id ?? 'system';
     const res = await this.resolveUnknownHandler.execute(
-      new ResolveUnknownDispenseCommand(tranId, b.actorId, b.resolution, b.reason, b.adminOverrideReason),
+      new ResolveUnknownDispenseCommand(tranId, actorId, b.resolution, b.reason, b.adminOverrideReason),
     );
+
+    await this.audit?.record({
+      actorId,
+      action: 'dispense.resolve_unknown',
+      entityType: 'payment',
+      entityId: tranId,
+      after: { resolution: b.resolution },
+      reason: b.reason,
+    });
+
     return { data: res };
   }
 }

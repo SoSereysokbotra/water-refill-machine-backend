@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Header, HttpCode, Inject, Ip, Logger, Param, Post, UseGuards } from '@nestjs/common';
-import { AdminKeyGuard, LocalOnlyGuard } from '../../../../platform/security/access.guards';
+import { LocalOnlyGuard, SessionAuthGuard, RolesGuard, Roles } from '../../../../platform/security';
 import { QueueService } from '../../../../platform/queues/queue.service';
 import { RateLimiterService } from '../../../../platform/rate-limit/rate-limiter.service';
 import { ConfigService } from '../../../../platform/config/config.service';
@@ -55,7 +55,8 @@ export class PaymentsController {
   }
 
   @Get('v1/payments/:tranId')
-  @UseGuards(AdminKeyGuard)
+  @UseGuards(SessionAuthGuard, RolesGuard)
+  @Roles('operator')
   async getPayment(@Param('tranId') tranId: string) {
     const payment = await this.repo.get(tranId);
     const amount = payment.currency === 'USD' ? payment.amountMinor / 100 : payment.amountMinor;

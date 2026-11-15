@@ -1,8 +1,9 @@
-import { Body, Controller, Get, Inject, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Optional, Param, Patch, Post, Put, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
-import { AdminKeyGuard } from '../../../platform/security/access.guards';
+import { SessionAuthGuard, RolesGuard, Roles, CurrentUser, AuthenticatedUser } from '../../../platform/security';
 import { ValidationError } from '../../../shared-kernel';
 import { MachinesService } from '../application';
+import { AUDIT_LOGGER_PORT, AuditLoggerPort } from '../../identity/application/public/audit-logger.port';
 
 // REST prices are minor units (USD cents, KHR riel), like refund amounts. Devices get major units (C2/C3).
 const PriceMinor = z.number().int().positive();
@@ -38,15 +39,19 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
 
 const toTier = (p: z.infer<typeof PricesBody>) => ({ 500: p['500'], 750: p['750'], 1000: p['1000'] });
 
-/** Plan §C7 machines endpoints. Operator/admin: local-only or X-Admin-Key until Phase 6 roles. */
+/** Plan §C7 machines endpoints. Protected by SessionAuthGuard and RolesGuard. */
 @Controller('v1/machines')
-@UseGuards(AdminKeyGuard)
+@UseGuards(SessionAuthGuard, RolesGuard)
 export class MachinesController {
-  constructor(@Inject(MachinesService) private readonly machines: MachinesService) {}
+  constructor(
+    @Inject(MachinesService) private readonly machines: MachinesService,
+    @Optional() @Inject(AUDIT_LOGGER_PORT) private readonly audit?: AuditLoggerPort,
+  ) {}
 
   /** Provision: row + prices + MQTT username + one-time password (shown once). */
   @Post()
-  async provision(@Body() body: unknown) {
+  @Roles('admin')
+  async provision(@Body() body: unknown, @CurrentUser() user?: AuthenticatedUser) {
     const b = parse(ProvisionBody, body);
     const res = await this.machines.provision({
       id: b.id,
@@ -55,37 +60,91 @@ export class MachinesController {
       currency: b.currency,
       pricesMinor: toTier(b.prices),
     });
+
+    await this.audit?.record({
+      actorId: user?.id ?? 'system',
+      action: 'machine.provision',
+      entityType: 'machine',
+      entityId: res.machine.id,
+      after: { name: b.name, currency: b.currency, prices: b.prices },
+    });
+
     return { data: res };
   }
 
   @Get()
+  @Roles('viewer')
   async list() {
     return { data: await this.machines.list() };
   }
 
   @Get(':id')
+  @Roles('viewer')
   async get(@Param('id') id: string) {
     return { data: await this.machines.get(id) };
   }
 
   @Patch(':id')
-  async update(@Param('id') id: string, @Body() body: unknown) {
-    return { data: await this.machines.update(id, parse(PatchBody, body)) };
+  @Roles('admin')
+  async update(@Param('id') id: string, @Body() body: unknown, @CurrentUser() user?: AuthenticatedUser) {
+    const patch = parse(PatchBody, body);
+    const res = await this.machines.update(id, patch);
+
+    await this.audit?.record({
+      actorId: user?.id ?? 'system',
+      action: 'machine.update',
+      entityType: 'machine',
+      entityId: id,
+      after: patch,
+    });
+
+    return { data: res };
   }
 
   @Put(':id/prices')
-  async setPrices(@Param('id') id: string, @Body() body: unknown) {
+  @Roles('admin')
+  async setPrices(@Param('id') id: string, @Body() body: unknown, @CurrentUser() user?: AuthenticatedUser) {
     const b = parse(PricesPutBody, body);
-    return { data: await this.machines.setPrices(id, b.currency, toTier(b.prices)) };
+    const res = await this.machines.setPrices(id, b.currency, toTier(b.prices));
+
+    await this.audit?.record({
+      actorId: user?.id ?? 'system',
+      action: 'price.update',
+      entityType: 'machine',
+      entityId: id,
+      after: { currency: b.currency, prices: b.prices },
+    });
+
+    return { data: res };
   }
 
   @Post(':id/rotate-credentials')
-  async rotate(@Param('id') id: string) {
-    return { data: await this.machines.rotateCredentials(id) };
+  @Roles('admin')
+  async rotate(@Param('id') id: string, @CurrentUser() user?: AuthenticatedUser) {
+    const res = await this.machines.rotateCredentials(id);
+
+    await this.audit?.record({
+      actorId: user?.id ?? 'system',
+      action: 'machine.rotate_credentials',
+      entityType: 'machine',
+      entityId: id,
+    });
+
+    return { data: res };
   }
 
   @Post(':id/decommission')
-  async decommission(@Param('id') id: string) {
-    return { data: await this.machines.decommission(id) };
+  @Roles('admin')
+  async decommission(@Param('id') id: string, @CurrentUser() user?: AuthenticatedUser) {
+    const res = await this.machines.decommission(id);
+
+    await this.audit?.record({
+      actorId: user?.id ?? 'system',
+      action: 'machine.decommission',
+      entityType: 'machine',
+      entityId: id,
+    });
+
+    return { data: res };
   }
 }

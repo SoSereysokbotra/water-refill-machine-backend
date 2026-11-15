@@ -1,1 +1,3 @@
-export const IDENTITY_INTERFACE = 'identity/interface';
+export * from './auth.controller';
+export * from './users.controller';
+export * from './audit-logs.controller';

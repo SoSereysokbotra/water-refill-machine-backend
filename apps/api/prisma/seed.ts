@@ -1,4 +1,5 @@
-import { PrismaClient, Currency } from '@prisma/client';
+import { PrismaClient, Currency, UserRole } from '@prisma/client';
+import { hash } from '@node-rs/argon2';
 
 const prisma = new PrismaClient();
 
@@ -73,6 +74,50 @@ export async function seedDatabase() {
         },
       });
     }
+  }
+
+  console.log('[Seed] Seeding default development users...');
+  const users = [
+    {
+      id: 'usr-admin-seed',
+      email: 'admin@wrm.kh',
+      name: 'WRM Administrator',
+      role: UserRole.admin,
+      password: 'AdminPassword123!',
+    },
+    {
+      id: 'usr-operator-seed',
+      email: 'operator@wrm.kh',
+      name: 'WRM Operator',
+      role: UserRole.operator,
+      password: 'OperatorPassword123!',
+    },
+    {
+      id: 'usr-viewer-seed',
+      email: 'viewer@wrm.kh',
+      name: 'WRM Viewer',
+      role: UserRole.viewer,
+      password: 'ViewerPassword123!',
+    },
+  ];
+
+  for (const u of users) {
+    const passwordHash = await hash(u.password);
+    await prisma.user.upsert({
+      where: { email: u.email },
+      update: {
+        name: u.name,
+        role: u.role,
+        passwordHash,
+      },
+      create: {
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        role: u.role,
+        passwordHash,
+      },
+    });
   }
 
   console.log('[Seed] Seed completed successfully.');
