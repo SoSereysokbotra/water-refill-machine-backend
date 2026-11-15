@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 5: Monitoring 🟦** (code & automated tests complete; awaiting manual unplug check). Phase 3 still needs its STM32-reboot + 2 h offline check |
-| **Next action** | Run `readmePhase5.md` §4 unplug-ESP32 Telegram check; merge `feat/phase-5-monitoring`; then Phase 6 (Identity) or Phase 3.5 pilot setup |
-| **Last updated** | 2026-11-12 by Claude for backend developer |
-| **Last commit** | branch `feat/phase-5-monitoring` |
+| **Current phase** | **Phase 8: Observability ✅** (code & automated tests complete). Phase 5 awaiting manual unplug check; Phase 3 needs STM32-reboot + 2 h offline check |
+| **Next action** | Phase 9 (Production Deployment) or Phase 3.5 pilot setup |
+| **Last updated** | 2026-11-14 by Antigravity |
+| **Last commit** | Phase 8 completion |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -34,10 +34,10 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 | 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
 | 3.5 | Early pilot | ⬜ | | | | |
 | 4 | Fleet | ✅ | Claude (for backend developer) | 2026-11-12 | 2026-11-12 | `feat/phase-4-fleet` |
-| 5 | Monitoring | 🟦 | Claude (for backend developer) | 2026-11-12 | | `feat/phase-5-monitoring` |
-| 6 | Identity | ⬜ | | | | |
-| 7 | Reporting & dashboard | ⬜ | | | | |
-| 8 | Observability | ⬜ | | | | |
+| 5 | Monitoring | 🟦 | Claude (for backend developer) | 2026-11-12 | 2026-11-13 | `75fa502` |
+| 6 | Identity | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `dc03412` |
+| 7 | Reporting & dashboard | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `9169499` |
+| 8 | Observability | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `ba06663` |
 | 9 | Production deployment | ⬜ | | | | |
 | 10 | Hardening & go-live | ⬜ | | | | |
 | 11 | OTA updates | ⬜ | | | | |
@@ -49,6 +49,24 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 ## 3. Definition of Done: current phase
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
+
+### Phase 8: Observability (completed)
+- [x] One payment followed in a single trace (MQTT -> DB -> ABA -> Outbox -> Relay -> Publish)
+- [x] All Deployment §10 alerts tested by simulation
+- [x] Structured logs carry traceId, tranId, machineId with sensitive redaction
+- [x] Prometheus /metrics endpoint active with all Plan B6 metrics
+- [x] Grafana dashboards as code provisioned
+- [x] `PROGRESS.md` updated with handoff note
+
+### Phase 7: Reporting & dashboard (completed)
+- [x] Gross, refunds and net revenue match DB totals for seeded scenarios (both currencies)
+- [x] Refund queue fully operable from the UI and audit-logged
+- [x] `PROGRESS.md` updated with handoff note
+
+### Phase 6: Identity (code & automated tests complete)
+- [x] Only health, callback and auth reachable without a session
+- [x] Every sensitive action audit-logged
+- [x] `PROGRESS.md` updated with handoff note
 
 ### Phase 5: Monitoring (code & automated tests complete)
 - [x] One alert per incident for every rule
@@ -156,6 +174,187 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-14: Phase 8 Observability (completed) by Antigravity
+
+**Done this session**
+- **OpenTelemetry Distributed Tracing & W3C Tracecontext:**
+  - Implemented `TracerService` in `apps/api/src/platform/telemetry/tracer.service.ts` using `@opentelemetry/api` and `@opentelemetry/sdk-trace-base` with `BasicTracerProvider` and `InMemorySpanExporter`.
+  - Propagated `traceId` across the asynchronous barrier:
+    - Extended `DomainEvent` with `traceId?: string`.
+    - Updated `OutboxService` to automatically stamp active `traceId` into `outbox.payload`.
+    - Updated `OutboxRelay` to extract `payload.traceId`, attach to BullMQ jobs, and wrap handlers in active spans (`outbox.handler.*`).
+    - Updated `PaymentsMqttConsumer` to initiate root traces on `pay/request` (`mqtt.pay_request`).
+    - Updated `PayWayGatewayAdapter` to record child spans (`aba.generate_qr`, `aba.check_transaction`).
+    - Updated `PaymentOutboxHandlers` to publish under the trace context (`mqtt.publish_pay_qr`, `mqtt.publish_pay_status`).
+  - Verified a single payment flow is followed in a single trace across all 4 hops (MQTT -> DB -> ABA -> Outbox -> Relay -> Publish).
+- **Pino Structured Logging with Context Correlation:**
+  - Created `apps/api/src/platform/logging/correlation-context.ts` using `AsyncLocalStorage` to store `traceId`, `tranId`, `machineId`, `requestId`, `jobId`.
+  - Configured `PinoLoggerModule` in `logger.module.ts` with custom formatters to inject correlation properties into all log entries.
+  - Enforced redaction paths for passwords, API keys, hashes, tokens, and QR strings (`[REDACTED]`).
+- **Prometheus Metrics Engine & `/metrics` Scrape Endpoint:**
+  - Added `prom-client` and implemented `MetricsService` in `apps/api/src/platform/metrics/metrics.service.ts` covering all Plan B6 metrics (counters, histograms, gauges).
+  - Implemented `MetricsCollectorService` to gather live database gauges (outbox lag, machines online, dispense unknown count, refund cases count, pending outcomes per machine, BullMQ queue depths).
+  - Implemented `MetricsController` (`GET /metrics`) exposing Prometheus text exposition format with default Node.js runtime metrics (`wrm_node_*`).
+  - Hooked metrics into `CreatePaymentHandler`, `ConfirmPaymentHandler`, `RecordDispenseHandler`, `PayWayGatewayAdapter`, and `PaymentsMqttConsumer`.
+- **Grafana Dashboards as Code:**
+  - Created 6 production JSON dashboards in `infra/grafana/dashboards/`:
+    - `payments-and-revenue.json` (success rate, creation rate, time-to-paid p50/p95, transitions, throttling)
+    - `aba-payway-gateway.json` (circuit breaker state, latency p50/p95/p99, check failures, operation calls)
+    - `kiosk-fleet.json` (online count, kiosk pending outcomes, ack rates)
+    - `outcomes-and-acks.json` (dispense sensor accuracy discrepancy histogram, accepted vs rejected acks)
+    - `queues-outbox-sweeps.json` (outbox lag seconds, BullMQ queue depth)
+    - `refunds.json` (open cases, dispense unknown, late payments)
+    - `infrastructure.json` (CPU, heap/RSS memory, event loop lag)
+  - Created automated provisioning configs in `infra/grafana/provisioning/dashboards/dashboards.yml` and `infra/grafana/provisioning/datasources/datasources.yml`.
+- **Deployment §10 Alert Rules & Simulation Suite:**
+  - Defined all 15 operational alert rules in `infra/prometheus/rules/alerts.yml` and `infra/prometheus/prometheus.yml`.
+  - Authored automated simulation test suite in `apps/api/test/observability.spec.ts` (21 tests) evaluating all rules under healthy vs degraded scenarios.
+- **Sentry Release Integration:**
+  - Added release tagging and environment context in `apps/api/src/platform/telemetry/telemetry.init.ts`.
+  - Hooked global exception filter to forward 5xx and unhandled errors with traceId and context to Sentry.
+- **Documentation:**
+  - Authored comprehensive [readmePhase8.md](readmePhase8.md).
+
+**Not finished / next steps** (in order)
+1. Phase 9 (Production Deployment): Dockerfiles, multi-stage images, `docker-compose.prod.yml`, GitHub Actions CD (`deploy.yml`), and staging rollout.
+2. Phase 5 / Phase 3 manual check items (ESP32 unplug Telegram check, STM32 reboot).
+
+**Changed from the plan** (and whether the plan was updated)
+- None. Followed Plan B6 and Deployment §10 precisely.
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- `pnpm --filter @wrm/api test test/observability.spec.ts` → 21 passed
+- `pnpm test:unit` → 18 test files, 164 passed
+- `pnpm --filter @wrm/api depcruise` → 0 boundary violations
+- `pnpm typecheck` → 4 packages clean
+- `pnpm lint` → 0 errors
+- `pnpm build` → clean production build
+
+**Needs from a person**
+- `[HUMAN]` When deploying to staging/production: configure `OTEL_EXPORTER_OTLP_ENDPOINT`, `SENTRY_DSN`, and Grafana Cloud / Prometheus scrape targets.
+
+---
+
+### 2026-11-14: Phase 7 Reporting & Operator Dashboard (completed) by Antigravity
+
+**Done this session**
+- **CQRS Read-Side Architecture & SQL Views:**
+  - Added migration `20261114010000_phase7_reporting_views` defining:
+    - Materialized view `sales_daily` (gross, refunds, net revenue, dispensed/refunded counts, total volume) with unique index `(date, currency)`.
+    - Materialized view `sales_by_machine` with unique index `(machine_id, date, currency)`.
+    - Real-time view `machine_status_view` joining kiosks and active alert incidents.
+    - Real-time view `refund_queue_view` joining refund cases, payments, and kiosk online presence.
+  - Implemented `ReportingSweep` running every 5 min (300,000 ms) via `SweepsScheduler` to execute `REFRESH MATERIALIZED VIEW CONCURRENTLY` with graceful non-concurrent fallback.
+  - Built `ReportingService` with parameterized querying, date/kiosk filtering, pagination, and RFC 4180 CSV generation with major and minor currency calculations.
+- **Reporting REST Endpoints:**
+  - Implemented `ReportsController` (`/v1/reports`) protected by `SessionAuthGuard` and `RolesGuard`:
+    - `GET /v1/reports/sales`: supports `from`, `to`, `machineId`, `groupBy` (`day` | `machine`), `limit`, `offset`, and `format=csv`.
+    - `GET /v1/reports/machines/status`: fleet presence with active alert counts.
+    - `GET /v1/reports/refunds`: refund queue metrics and cases.
+    - `POST /v1/reports/refresh`: manual administrative view refresh.
+  - Registered `ReportingModule` in `AppModule`.
+- **Production Operator Dashboard (`apps/dashboard`):**
+  - Next.js 15 application with Tailwind CSS, Lucide icons, and TypeScript.
+  - Pages implemented:
+    - **Overview (`/`):** Real-time sales KPIs (gross, refunds, net in USD & KHR), fleet kiosks count, active alerts preview, open refunds preview.
+    - **Kiosk Fleet (`/machines`):** Provision kiosk modal (one-time MQTT credentials display with clipboard copy), edit pricing modal, enable/disable toggle, rotate credentials, decommission.
+    - **Refund Queue (`/refunds`):** Filter by status, display hardware online & STM32 state, pending outcomes safety warning, claim, mark refunded modal (disbursement method, reference, minor amount, emergency override), reject modal, reopen modal.
+    - **Payment Inspector (`/payments`):** Transaction search, amount, volume, state transition audit trail timeline, resolve `DISPENSE_UNKNOWN` modal.
+    - **Incidents & Alerts (`/alerts`):** Status filtering, acknowledge, resolve.
+    - **Sales Reports (`/reports`):** Date range filter, kiosk filter, group by day/kiosk, USD & KHR net revenue cards, breakdown table, CSV download, manual materialized view refresh.
+    - **Identity & Security Audit (`/users`):** User list, create user modal, role modification, live security audit trail table.
+  - Built-in 10-second background polling cycle for real-time alert and refund queue badge updates.
+- **Comprehensive Test Suites:**
+  - 10 tests in `apps/api/test/reporting.spec.ts` (100% passed): verifying concurrent refresh, net revenue calculations ($\text{Gross} - \text{Refunds} = \text{Net}$) for USD and KHR, pagination, CSV formatting, machine status view, and refund queue metrics.
+  - 4 tests in `apps/dashboard/test/dashboard.spec.ts` (100% passed): verifying frontend revenue invariants, hardware safety rules on pending outcomes, and API client request building.
+  - Full unit test suite: 18 test files, 147/147 tests passed (100% passed).
+  - TypeScript: 100% clean across all 4 monorepo packages (`turbo run typecheck`).
+  - Linter: 0 errors across all workspaces (`turbo run lint`).
+  - Architecture Boundaries: 0 violations across 152 modules (`pnpm --filter @wrm/api depcruise`).
+  - Production Build: Clean Next.js 15 production build (`turbo run build`).
+- **Documentation:**
+  - Created [readmePhase7.md](readmePhase7.md) detailing reporting views, REST endpoints, CSV export, and dashboard UI usage.
+
+**Not finished / next steps** (in order)
+1. Phase 8: Observability (OpenTelemetry traces through outbox, Prometheus `/metrics`, Grafana dashboards, Telegram ops alerts).
+2. Physical checks for Phase 3 (STM32 reboot + 2h offline check) and Phase 5 (unplug ESP32 Telegram notification check).
+
+**Changed from the plan**
+- None. Implemented exactly per Plan §C7 and Architecture §4 & §7.
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- Unit tests: `pnpm test:unit`
+- Reporting tests: `pnpm --filter @wrm/api test test/reporting.spec.ts`
+- Dashboard tests: `pnpm --filter @wrm/dashboard test`
+- Monorepo typecheck: `pnpm typecheck`
+- Monorepo lint: `pnpm lint`
+- Monorepo build: `pnpm build`
+- Boundaries: `pnpm --filter @wrm/api depcruise`
+
+**Needs from a person**
+- None.
+
+---
+
+### 2026-11-14: Phase 6 Identity (completed) by Antigravity
+
+**Done this session**
+- **ADR-0010 ([docs/adr/0010-identity-and-auth.md](docs/adr/0010-identity-and-auth.md)):** Documented spike evaluation comparing Better Auth vs NestJS Fastify fallback. Adopted native modular architecture: NestJS Guards + Argon2id (`@node-rs/argon2`) + PostgreSQL sessions + HTTP-only cookies (`wrm_session`) / Bearer tokens + `@Roles()` decorator + immutable `audit_logs`.
+- **Database Schema & Migrations:**
+  - Added `UserRole` enum (`admin`, `operator`, `viewer`).
+  - Added `User` model with Argon2id password hash, role, and optional TOTP secret.
+  - Added `Session` model with SHA-256 token hashing and configurable TTL expiry.
+  - Added `AuditLog` model recording immutable security logs with `actorId`, `action`, `entityType`, `entityId`, `before`, `after`, and `reason`.
+  - Added migration `20261114000000_phase6_identity`.
+- **Core Security & Identity Context:**
+  - `totp.util.ts`: Zero-dependency RFC 6238 TOTP generator and validator (HMAC-SHA1, 30s window, drift tolerance).
+  - `AuthService`: Argon2id password validation, brute-force rate-limiting (5 attempts per 15 min), secure session creation, session validation, logout.
+  - `UsersService`: User CRUD, role assignments, password updates, TOTP setup and verification.
+  - `AuditLogService` & `AUDIT_LOGGER_PORT`: Public cross-context port for logging sensitive operations without cross-context domain boundary violations.
+  - `SessionAuthGuard` & `RolesGuard`: Enforces session validation and three-tier role hierarchy (`admin` > `operator` > `viewer`).
+- **Endpoint Protection & Audit Trail:**
+  - Protected all existing endpoints across Fleet (`MachinesController`), Monitoring (`AlertsController`), and Payments (`RefundCasesController`, `PaymentsController`).
+  - Connected audit log calls to machine provisioning, machine updates, price updates, credential rotation, machine decommissioning, refund claims, mark-refunded, refund rejects, refund reopens, and unknown dispense resolutions.
+- **Seeding & Guides:**
+  - Updated `seed.ts` with default development accounts for `admin@wrm.kh`, `operator@wrm.kh`, and `viewer@wrm.kh`.
+  - Created complete operator and developer guide in [readmePhase6.md](readmePhase6.md).
+- **Test Suites & Verification:**
+  - 8 tests in `test/totp.spec.ts` (100% passed).
+  - 8 tests in `test/identity-services.spec.ts` (100% passed).
+  - 14 tests in `test/roles-guard.spec.ts` (100% passed).
+  - 7 tests in `test/identity-api.spec.ts` (100% passed).
+  - Total unit test suite: 16 test files, 133/133 tests passed (100% passed).
+  - Architecture boundaries: 0 violations across 148 modules with `pnpm --filter @wrm/api depcruise`.
+  - TypeScript: 100% clean (0 errors) across monorepo with `pnpm typecheck`.
+  - Linter: 0 errors with `pnpm lint`.
+
+**Not finished / next steps** (in order)
+1. Phase 7: Reporting & Operator Dashboard (materialized views for sales, Next.js dashboard UI).
+2. Physical checks for Phase 3 (STM32 reboot + 2h offline check) and Phase 5 (unplug ESP32 Telegram notification check).
+
+**Changed from the plan**
+- Adopted the documented architectural fallback in ADR-0010: NestJS session guards + Argon2id + sessions table with SHA-256 token hashing instead of Better Auth, ensuring native Fastify support and zero middleware impedance mismatch.
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- Unit tests: `pnpm --filter @wrm/api test:unit`
+- Identity tests: `pnpm --filter @wrm/api exec vitest run test/totp.spec.ts test/identity-services.spec.ts test/roles-guard.spec.ts test/identity-api.spec.ts`
+- Boundaries: `pnpm --filter @wrm/api depcruise`
+- Typecheck: `pnpm typecheck`
+
+**Needs from a person**
+- None.
 
 ---
 

@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
+import fastifyCookie from '@fastify/cookie';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { ConfigService } from './platform/config/config.service';
@@ -25,12 +26,13 @@ export async function bootstrap() {
 
   // RUN_MODE='api' or 'all'
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, { bufferLogs: true });
+  const config = app.get(ConfigService);
+  await app.register(fastifyCookie as any, { secret: config.get('AUTH_SECRET') });
   const logger = app.get(Logger);
   app.useLogger(logger);
   app.enableShutdownHooks();
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  const config = app.get(ConfigService);
   initTelemetry(config.all);
 
   const port = config.get('PORT');
