@@ -22,21 +22,36 @@ export class TelegramClient implements ITelegramClient {
       return;
     }
 
-    const url = `https://api.telegram.org/bot${token}/sendMessage`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-      }),
-    });
+    const chatIds = chatId
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
 
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      this.logger.error(`Telegram API error: ${res.status} ${errText}`);
-      throw new Error(`Telegram API error ${res.status}: ${errText}`);
+    if (chatIds.length === 0) {
+      this.logger.log(`[Telegram unconfigured] ${text}`);
+      return;
     }
+
+    const url = `https://api.telegram.org/bot${token}/sendMessage`;
+
+    await Promise.all(
+      chatIds.map(async (id) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: id,
+            text,
+          }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => '');
+          this.logger.error(`Telegram API error for chat ${id}: ${res.status} ${errText}`);
+          throw new Error(`Telegram API error ${res.status}: ${errText}`);
+        }
+      }),
+    );
   }
 }
 

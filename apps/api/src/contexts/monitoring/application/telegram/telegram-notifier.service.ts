@@ -14,6 +14,16 @@ export interface TelegramNotificationJob {
   count?: number;
 }
 
+export interface TelegramPaymentSuccessJob {
+  tranId: string;
+  machineId: string;
+  volumeMl: number;
+  amountMinor: number;
+  currency: string;
+  paidAt: Date | string;
+  abaApv?: string;
+}
+
 @Injectable()
 export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramNotifierService.name);
@@ -43,10 +53,14 @@ export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    this.worker = this.queueService.createWorker<TelegramNotificationJob>(
+    this.worker = this.queueService.createWorker<any>(
       'notify.telegram',
       async (job) => {
-        await this.processJob(job.data);
+        if (job.name === 'notify_payment') {
+          await this.processPaymentJob(job.data as TelegramPaymentSuccessJob);
+        } else {
+          await this.processJob(job.data as TelegramNotificationJob);
+        }
       },
       { concurrency: 5 },
     );
@@ -71,7 +85,12 @@ export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
 
   async enqueue(job: TelegramNotificationJob): Promise<void> {
     const jobId = `${job.alertId}__${job.action}`;
-    await this.queue.add('notify', job, { jobId });
+    await (this.queue as Queue<any>).add('notify', job, { jobId });
+  }
+
+  async enqueuePaymentSuccess(job: TelegramPaymentSuccessJob): Promise<void> {
+    const jobId = `payment__${job.tranId}`;
+    await (this.queue as Queue<any>).add('notify_payment', job, { jobId });
   }
 
   async processJob(job: TelegramNotificationJob): Promise<void> {
@@ -79,13 +98,45 @@ export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
     await this.telegramClient.sendMessage(text);
   }
 
+  async processPaymentJob(job: TelegramPaymentSuccessJob): Promise<void> {
+    const text = this.formatPaymentSuccessMessage(job);
+    await this.telegramClient.sendMessage(text);
+  }
+
+  private formatPaymentSuccessMessage(job: TelegramPaymentSuccessJob): string {
+    const liters = (job.volumeMl / 1000).toString();
+    const formattedCost =
+      job.currency === 'USD'
+        ? `$${(job.amountMinor / 100).toFixed(2)} USD`
+        : `${job.amountMinor.toLocaleString()} KHR`;
+
+    const d = new Date(job.paidAt);
+    const dateStr = !isNaN(d.getTime())
+      ? d.toISOString().replace('T', ' ').substring(0, 19) + ' UTC'
+      : String(job.paidAt);
+
+    return [
+      '💧 Water Refill Payment Successful!',
+      '',
+      `🏷 Machine: ${job.machineId}`,
+      `🚰 Volume: ${liters} L (${job.volumeMl} mL)`,
+      `💵 Cost: ${formattedCost}`,
+      `🕒 Date & Time: ${dateStr}`,
+      `🆔 Transaction: ${job.tranId}`,
+      job.abaApv ? `💳 Approval Code: ${job.abaApv}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
   private formatMessage(job: TelegramNotificationJob): string {
     const target = job.machineId ? ` on ${job.machineId}` : '';
     if (job.action === 'resolve') {
-      return `[RESOLVED] ${job.type}${target}: ${job.message}`;
+      return `✅ [RESOLVED] ${job.type}${target}: ${job.message}`;
     }
     const countInfo = job.count && job.count > 1 ? ` (count: ${job.count})` : '';
-    return `[ALERT ${job.severity.toUpperCase()}] ${job.type}${target}: ${job.message}${countInfo}`;
+    const icon = job.severity === 'critical' ? '🚨' : '⚠️';
+    return `${icon} [ALERT ${job.severity.toUpperCase()}] ${job.type}${target}: ${job.message}${countInfo}`;
   }
 }
 

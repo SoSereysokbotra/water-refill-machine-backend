@@ -56,6 +56,7 @@ export class MonitoringOutboxHandlers implements OnModuleInit {
     this.registry.register('payments.RefundRejected', 'MonitoringRefundRejectedHandler', this.handleRefundDecided.bind(this));
     this.registry.register('payments.LatePaymentDetected', 'MonitoringLatePaymentHandler', this.handleLatePaymentDetected.bind(this));
     this.registry.register('payments.PayRequestRejected', 'MonitoringPayRequestRejectedHandler', this.handlePayRequestRejected.bind(this));
+    this.registry.register('payments.PaymentPaid', 'MonitoringTelegramPaymentPaidHandler', this.handlePaymentPaid.bind(this));
 
     // Monitoring alert events -> Telegram notifier
     this.registry.register('monitoring.AlertRaised', 'MonitoringTelegramRaisedHandler', this.handleAlertRaised.bind(this));
@@ -185,6 +186,31 @@ export class MonitoringOutboxHandlers implements OnModuleInit {
       message: event.data.message,
       machineId: event.data.machineId,
     });
+  }
+
+  async handlePaymentPaid(
+    event: DomainEvent<{
+      tranId: string;
+      machineId: string;
+      paidAt: Date | string;
+      abaApv?: string;
+      volumeMl?: number;
+      amountMinor?: number;
+      currency?: string;
+    }>,
+  ): Promise<void> {
+    const { tranId, machineId, paidAt, abaApv, volumeMl, amountMinor, currency } = event.data;
+    if (volumeMl !== undefined && amountMinor !== undefined && currency !== undefined) {
+      await this.telegramNotifier.enqueuePaymentSuccess({
+        tranId,
+        machineId,
+        volumeMl,
+        amountMinor,
+        currency,
+        paidAt,
+        abaApv,
+      });
+    }
   }
 }
 

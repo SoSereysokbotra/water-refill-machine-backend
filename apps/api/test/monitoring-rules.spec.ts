@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TelegramNotifierService } from '../src/contexts/monitoring/application/telegram/telegram-notifier.service';
 import {
   ruleAccuracyMismatch,
   ruleConfigRejected,
@@ -299,6 +300,77 @@ describe('Monitoring Rules & Deduplication', () => {
 
     it('returns false if resolved alert has null resolvedAt', () => {
       expect(shouldMergeAlert({ status: 'resolved', resolvedAt: null }, now)).toBe(false);
+    });
+  });
+
+  describe('Telegram Message Formatting', () => {
+    it('formats payment success with liters, cost in USD, machine and timestamp', () => {
+      const service = new TelegramNotifierService({} as any, {} as any, {} as any);
+
+      const msg = (service as any).formatPaymentSuccessMessage({
+        tranId: 'tr-abc-123',
+        machineId: 'WRM-001',
+        volumeMl: 500,
+        amountMinor: 20,
+        currency: 'USD',
+        paidAt: new Date('2026-11-16T13:30:00Z'),
+        abaApv: 'APV9988',
+      });
+
+      expect(msg).toContain('💧 Water Refill Payment Successful!');
+      expect(msg).toContain('WRM-001');
+      expect(msg).toContain('0.5 L (500 mL)');
+      expect(msg).toContain('$0.20 USD');
+      expect(msg).toContain('2026-11-16 13:30:00 UTC');
+      expect(msg).toContain('tr-abc-123');
+      expect(msg).toContain('APV9988');
+    });
+
+    it('formats payment success for 1000 mL and KHR currency', () => {
+      const service = new TelegramNotifierService({} as any, {} as any, {} as any);
+
+      const msg = (service as any).formatPaymentSuccessMessage({
+        tranId: 'tr-khr-456',
+        machineId: 'WRM-002',
+        volumeMl: 1000,
+        amountMinor: 1000,
+        currency: 'KHR',
+        paidAt: '2026-11-16T14:00:00Z',
+      });
+
+      expect(msg).toContain('WRM-002');
+      expect(msg).toContain('1 L (1000 mL)');
+      expect(msg).toContain('1,000 KHR');
+    });
+
+    it('formats error alerts with machine and severity icon', () => {
+      const service = new TelegramNotifierService({} as any, {} as any, {} as any);
+
+      const alertMsg = (service as any).formatMessage({
+        action: 'raise',
+        alertId: 'alt-1',
+        type: 'MACHINE_OFFLINE',
+        severity: 'critical',
+        message: 'Machine is offline',
+        machineId: 'WRM-001',
+        count: 1,
+      });
+
+      expect(alertMsg).toContain('🚨 [ALERT CRITICAL]');
+      expect(alertMsg).toContain('WRM-001');
+      expect(alertMsg).toContain('Machine is offline');
+
+      const resolveMsg = (service as any).formatMessage({
+        action: 'resolve',
+        alertId: 'alt-1',
+        type: 'MACHINE_OFFLINE',
+        severity: 'critical',
+        message: 'Machine back online',
+        machineId: 'WRM-001',
+      });
+
+      expect(resolveMsg).toContain('✅ [RESOLVED]');
+      expect(resolveMsg).toContain('WRM-001');
     });
   });
 });

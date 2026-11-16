@@ -268,6 +268,47 @@ Add a new note at the top at the end of every session.
 
 ---
 
+### 2026-11-16: Telegram Bot & Payment Notification Integration by Antigravity
+
+**Done this session**
+- **Connected Telegram Bot & Group Broadcast:**
+  - Configured `TELEGRAM_BOT_TOKEN` and multi-recipient `TELEGRAM_CHAT_ID` (`-5284587137, 1175215216`) in `apps/api/.env` and updated `apps/api/.env.example`.
+  - Added multi-recipient support in `TelegramClient` allowing simultaneous broadcast to Telegram groups (negative chat IDs) and individual users.
+  - Connected the Telegram Bot `@WaterRefilMachine1Bot` to the team group "Water Refill Machine" (`-5284587137`) and dispatched welcome confirmation.
+  - Verified live broadcast of payment success notifications and hardware fault alerts to both the group and individual recipient in real-time.
+- **Payment Success Notifications:**
+  - Extended `PaymentPaidData` in `payment.events.ts` and `Payment.markPaid` in `payment.aggregate.ts` to include `volumeMl`, `amountMinor`, and `currency`.
+  - Added `enqueuePaymentSuccess` and `processPaymentJob` in `TelegramNotifierService` with message formatting for volume (L/mL), formatted cost (USD/KHR), UTC date/time, machine ID, transaction ID, and ABA approval code.
+  - Registered `payments.PaymentPaid` domain event in `MonitoringOutboxHandlers` to automatically trigger Telegram notifications upon confirmed payments.
+- **Error & Alert Notifications:**
+  - Enhanced Telegram message formatting for alerts (`🚨 [ALERT CRITICAL]`, `⚠️ [ALERT WARNING]`) and resolutions (`✅ [RESOLVED]`) across all hardware faults, offline status, and accuracy discrepancies.
+- **Verification & Testing:**
+  - Added unit test suite in `apps/api/test/monitoring-rules.spec.ts` for payment success and error alert formatting (100% passing).
+  - All unit test files and integration test files passing cleanly.
+  - Architecture boundaries: 0 violations across 163 modules (`depcruise`).
+  - Monorepo production build: clean across `@wrm/api`, `@wrm/dashboard`, `@wrm/contracts`.
+
+**Not finished / next steps** (in order)
+1. Phase 9 (Production Deployment): Dockerfiles, multi-stage images, `docker-compose.prod.yml`, GitHub Actions CD (`deploy.yml`).
+2. Phase 5 / Phase 3 manual check items (ESP32 unplug Telegram check, STM32 reboot).
+
+**Changed from the plan**
+- Extended `TelegramNotifierService` and `MonitoringOutboxHandlers` to deliver payment success notifications with liters, cost, time, and machine ID in addition to operational error alerts.
+
+**Known issues / bugs**
+- None.
+
+**How to run / test**
+- `pnpm test:unit` → 100% passed
+- `pnpm test:integration` → 100% passed
+- `pnpm --filter @wrm/api depcruise` → 0 violations
+- `pnpm build` → clean production build
+
+**Needs from a person**
+- None. Telegram Bot is connected and verified.
+
+---
+
 ### 2026-11-14: Phase 8 Observability (completed) by Antigravity
 
 **Done this session**

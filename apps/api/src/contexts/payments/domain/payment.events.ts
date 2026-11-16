@@ -17,6 +17,9 @@ export interface PaymentPaidData {
   machineId: string;
   paidAt: Date;
   abaApv?: string;
+  volumeMl?: number;
+  amountMinor?: number;
+  currency?: Currency;
 }
 
 export interface PaymentExpiredData {
