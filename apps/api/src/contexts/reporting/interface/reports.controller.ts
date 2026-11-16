@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Inject, Post, Query, Res, UseGuards } from '@nestjs/common';
 import { FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { SessionAuthGuard, RolesGuard, Roles } from '../../../platform/security';
@@ -33,7 +33,7 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
 @Controller('v1/reports')
 @UseGuards(SessionAuthGuard, RolesGuard)
 export class ReportsController {
-  constructor(private readonly reportingService: ReportingService) {}
+  constructor(@Inject(ReportingService) private readonly reportingService: ReportingService) {}
 
   @Get('sales')
   @Roles('viewer')

@@ -106,11 +106,11 @@ export interface AlertItem {
   id: string;
   type: string;
   severity: 'critical' | 'warning' | 'info';
-  status: 'active' | 'ack' | 'resolved';
+  status: 'active' | 'acknowledged' | 'resolved';
   machineId: string;
   data: Record<string, unknown>;
   createdAt: string;
-  ackAt: string | null;
+  acknowledgedAt: string | null;
   resolvedAt: string | null;
 }
 

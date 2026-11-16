@@ -7,7 +7,7 @@ import { CheckCircle2, Filter } from 'lucide-react';
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [filter, setFilter] = useState<'active' | 'ack' | 'resolved' | 'all'>('active');
+  const [filter, setFilter] = useState<'active' | 'acknowledged' | 'resolved' | 'all'>('active');
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -58,7 +58,7 @@ export default function AlertsPage() {
 
           <div className="flex items-center space-x-1.5 bg-white p-1 rounded-lg border border-slate-200 text-xs shadow-sm">
             <Filter className="w-3.5 h-3.5 text-slate-400 ml-2" />
-            {(['active', 'ack', 'resolved', 'all'] as const).map((s) => (
+            {(['active', 'acknowledged', 'resolved', 'all'] as const).map((s) => (
               <button
                 key={s}
                 onClick={() => setFilter(s)}
@@ -149,7 +149,7 @@ export default function AlertsPage() {
                             className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                               a.status === 'active'
                                 ? 'bg-red-100 text-red-800'
-                                : a.status === 'ack'
+                                : a.status === 'acknowledged'
                                 ? 'bg-amber-100 text-amber-800'
                                 : 'bg-green-100 text-green-800'
                             }`}

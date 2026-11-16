@@ -45,7 +45,8 @@ export class AlertsController {
   @Get()
   async listAlerts(@Query() query: unknown) {
     const parsed = parse(ListQuery, query);
-    return this.alertService.listAlerts(parsed.status as AlertStatus | undefined);
+    const alerts = await this.alertService.listAlerts(parsed.status as AlertStatus | undefined);
+    return { data: alerts };
   }
 
   @Post(':id/ack')
@@ -65,7 +66,7 @@ export class AlertsController {
       entityId: id,
     });
 
-    return res;
+    return { data: res };
   }
 
   @Post(':id/resolve')
@@ -85,6 +86,6 @@ export class AlertsController {
       entityId: id,
     });
 
-    return res;
+    return { data: res };
   }
 }

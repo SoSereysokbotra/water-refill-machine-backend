@@ -422,7 +422,8 @@ describe('Phase 5 Acceptance (E2E)', () => {
   it('Scenario 9: REST endpoints (list, ack, validation)', async () => {
     const listRes = await req('GET', '/v1/alerts?status=active');
     expect(listRes.statusCode).toBe(200);
-    const list = listRes.json();
+    const json = listRes.json();
+    const list = Array.isArray(json) ? json : json.data;
     expect(Array.isArray(list)).toBe(true);
 
     const targetAlert = list.find((a: any) => a.machineId === MACHINE_ID);
@@ -431,7 +432,8 @@ describe('Phase 5 Acceptance (E2E)', () => {
     // Ack: the actor is the logged-in user (locally the dev admin), a body actorId is ignored (Phase 6)
     const ackRes = await req('POST', `/v1/alerts/${targetAlert.id}/ack`, { actorId: 'mallory' });
     expect(ackRes.statusCode).toBe(201);
-    const acked = ackRes.json();
+    const ackJson = ackRes.json();
+    const acked = ackJson.data ?? ackJson;
     expect(acked.status).toBe('acknowledged');
     expect(acked.acknowledgedBy).toBe('usr-dev-admin');
 
