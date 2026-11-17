@@ -9,10 +9,10 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 8: Observability ✅** (code & automated tests complete). Phase 5 awaiting manual unplug check; Phase 3 needs STM32-reboot + 2 h offline check |
-| **Next action** | Phase 9 (Production Deployment) or Phase 3.5 pilot setup |
-| **Last updated** | 2026-11-14 by Antigravity |
-| **Last commit** | Phase 8 completion |
+| **Current phase** | **Phase 3.5: Early pilot 🟦** (laptop/PC pilot chosen, files + rehearsal done; user to run it). Phase 3 needs STM32-reboot + 2 h offline check; Phase 5 needs the Telegram unplug check |
+| **Next action** | User runs the laptop pilot: `readmePhase3_5-laptop.md` Parts A–D, then the ESP32 payment check (C4) |
+| **Last updated** | 2026-11-17 by Claude |
+| **Last commit** | `15c0467` (merge of `feat/phase-3.5-pilot`) |
 
 ### Before Phase 0 (prototype, already working)
 - ✅ Prototype backend (`backend-prototype/`): ABA sandbox KHQR payment tested end to end with the ABA simulator app
@@ -32,7 +32,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 | 1 | Platform | ✅ | Backend developer | 2026-11-09 | 2026-11-09 | `phase1` |
 | 2 | Payments | ✅ | Backend developer | 2026-11-10 | 2026-11-12 | `48069dd` |
 | 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
-| 3.5 | Early pilot | 🟦 | Claude (files) + backend developer (server) | 2026-11-17 | | `feat/phase-3.5-pilot` |
+| 3.5 | Early pilot | 🟦 | Claude (files) + backend developer (runs on own PC) | 2026-11-17 | | `feat/phase-3.5-laptop-pilot` |
 | 4 | Fleet | ✅ | Claude (for backend developer) | 2026-11-12 | 2026-11-12 | `feat/phase-4-fleet` |
 | 5 | Monitoring | 🟦 | Claude (for backend developer) | 2026-11-12 | 2026-11-13 | `75fa502` |
 | 6 | Identity | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `dc03412` |
@@ -128,6 +128,7 @@ Things an AI agent can't do. A person does them, then ticks the box.
 | Move your real `secrets.h` from the old `esp32-gateway/include/` to `firmware/esp32-gateway/include/` (git-ignored; Phase 0 moved the folder but not this file) | 3 | Backend developer | ✅ |
 | Existing local dev databases (created with `db push`): run `pnpm --filter @wrm/api exec prisma migrate resolve --applied 20261111000000_init`, then `pnpm --filter @wrm/api db:deploy` | 3 | Each developer | ⬜ |
 | Before the pilot: generate `ADMIN_API_KEY` (≥ 32 chars) for staging/production `.env` and keep it private | 3.5 | Backend developer | ⬜ |
+| Run the laptop pilot (`readmePhase3_5-laptop.md` A–D) and the ESP32 payment check C4; keep `apps/api/.env` on local Mosquitto meanwhile | 3.5 | Backend developer | ⬜ |
 | Confirm the first GitHub Actions run of the new CI workflow is green (could not be run from the review machine) | 3 | Backend developer | ✅ |
 | Flash ESP32 **v0.5.0**, then run Phase 4 checks: price change → `CFG,OK`; offline within 3 min of power loss (`readmePhase4.md` §3) | 4 | Backend developer | ✅ 2026-11-12 (v0.5.1) |
 | EMQX `wrm-backend` password was committed in `424e5e6`: changed in the EMQX console 2026-11-12 | — | Backend developer | ✅ |
@@ -176,6 +177,33 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-17: Phase 3.5 laptop pilot (Claude) — on `feat/phase-3.5-laptop-pilot`
+
+**Done this session**
+- User chose to run the pilot on their **laptop / always-on PC** (Oracle signup needs a card).
+- `infra/pilot/docker-compose.laptop.yml` (override: Caddy plain HTTP on `127.0.0.1:${LAPTOP_HTTP_PORT:-8080}`, optional `tunnel` profile = Cloudflare quick tunnel), `infra/pilot/.env.laptop.example`, `infra/pilot/scripts/laptop.ps1` (start, status, logs, seed, backup, restore, tunnel, stop), guide `readmePhase3_5-laptop.md`; link from `readmePhase3_5.md`.
+- Dress rehearsal on the dev PC (throwaway secrets, local Mosquitto, fake ABA): empty DB → migrations, health OK via Caddy :8080, `/metrics` + `/dev` 404, `/v1/machines` 401 → admin via `X-Admin-Key` → login → 200 over HTTP localhost, seed (machines only), backup (40 KB dump) → restore → healthy, tunnel → health 200 + `/metrics` 404 via public URL. Rehearsal stack, volumes and files removed afterwards.
+
+**Not finished / next steps** (in order)
+1. User follows `readmePhase3_5-laptop.md` Parts A–D on `main` (after merge).
+2. `[MANUAL CHECK]` ESP32 payment end to end on the pilot (Part C4).
+3. Start the weekly pilot log here.
+
+**Changed from the plan**
+- Plan 3.5 expects a cloud server; the pilot runs on the user's PC (no static IP, no public HTTPS; ABA callback replaced by polling, which the backend already does). Plan not updated (temporary choice; Oracle guide kept for later).
+
+**Known issues / bugs**
+- The pilot is down whenever the PC is off, asleep, offline or not signed in (Docker Desktop starts only after sign-in).
+- Backups stay on the same PC unless copied off manually.
+
+**How to run / test**
+- `powershell -ExecutionPolicy Bypass -File infra\pilot\scripts\laptop.ps1 start` → `{"status":"ok",...}` and `Pilot OK -> http://localhost:8080`
+
+**Needs from a person**
+- Fill `infra/pilot/.env`, switch `apps/api/.env` to local Mosquitto (only one backend on EMQX), run the guide.
 
 ---
 
