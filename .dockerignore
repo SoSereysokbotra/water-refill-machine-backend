@@ -1,0 +1,18 @@
+# Keep the Docker build context small and free of secrets
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+**/.env
+**/*.env
+.git
+docs
+docs_archive_all_60
+firmware
+esp32-gateway
+backend
+backend-prototype
+apps/dashboard
+infra
+*.md
