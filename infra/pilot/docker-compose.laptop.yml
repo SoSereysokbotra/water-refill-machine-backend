@@ -1,0 +1,25 @@
+# Phase 3.5 pilot on a laptop / always-on PC (no cloud server). Used ON TOP of docker-compose.pilot.yml:
+#   docker compose -f docker-compose.pilot.yml -f docker-compose.laptop.yml up -d --build
+# Easier: powershell -File infra/pilot/scripts/laptop.ps1 start   (see readmePhase3_5-laptop.md)
+#
+# Differences from the server:
+# - Caddy serves plain HTTP on 127.0.0.1:<LAPTOP_HTTP_PORT> (default 8080), only reachable from this PC.
+#   No certificate, no open ports. ABA callbacks cannot reach it, so payments confirm by polling ABA
+#   (every 3-5 s, already built in).
+# - Optional: profile "tunnel" starts a Cloudflare quick tunnel (free, random https://*.trycloudflare.com
+#   name that changes on every restart) if you want to test ABA callbacks too.
+
+services:
+  caddy:
+    ports: !override
+      - '127.0.0.1:${LAPTOP_HTTP_PORT:-8080}:80'
+    environment:
+      PUBLIC_HOST: ':80'   # Caddy site address ":80" = plain HTTP for any host name
+
+  tunnel:
+    image: cloudflare/cloudflared:2024.12.2
+    profiles: [tunnel]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://caddy:80
+    depends_on: [caddy]
+    networks: [internal]
