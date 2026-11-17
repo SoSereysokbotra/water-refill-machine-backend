@@ -32,7 +32,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 | 1 | Platform | ✅ | Backend developer | 2026-11-09 | 2026-11-09 | `phase1` |
 | 2 | Payments | ✅ | Backend developer | 2026-11-10 | 2026-11-12 | `48069dd` |
 | 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
-| 3.5 | Early pilot | ⬜ | | | | |
+| 3.5 | Early pilot | 🟦 | Claude (files) + backend developer (server) | 2026-11-17 | | `feat/phase-3.5-pilot` |
 | 4 | Fleet | ✅ | Claude (for backend developer) | 2026-11-12 | 2026-11-12 | `feat/phase-4-fleet` |
 | 5 | Monitoring | 🟦 | Claude (for backend developer) | 2026-11-12 | 2026-11-13 | `75fa502` |
 | 6 | Identity | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `dc03412` |
@@ -176,6 +176,24 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-17: Phase 3.5 pilot files (Claude) — server not created yet
+
+**Done**
+- Chosen hosting: **Oracle Cloud Always Free** (Singapore, Ampere ARM VM, $0): one server runs API + worker, PostgreSQL, Redis and Caddy (HTTPS via free `sslip.io` name).
+- `apps/api/Dockerfile` (multi-arch, runs `prisma migrate deploy` then the API), `.dockerignore`, `infra/pilot/` (compose, Caddyfile, `.env.pilot.example`, scripts: `open-firewall.sh`, `deploy.sh`, `backup.sh` daily/14 days, `restore.sh`), guide `readmePhase3_5.md`.
+- Dress rehearsal on the laptop: empty DB → all 6 migrations applied, `/health/ready` OK through Caddy HTTPS, `/metrics` + dev routes 404, refunds without login 401, first admin via `X-Admin-Key` → login → Secure cookie → protected route 200.
+
+**Changed from the plan**
+- Plan 3.5 says managed PostgreSQL; for the free pilot PostgreSQL runs in Docker on the same server with daily `pg_dump` backups (kept on the server; copy off-server manually). Move to a managed database before real money.
+- Dashboard (Phase 7) is not deployed in the pilot yet (API only).
+
+**Needs from a person** (follow `readmePhase3_5.md`)
+- Oracle account (home region Singapore), ARM VM, reserved IP, ports 80/443, deploy key, `.env`, `deploy.sh`.
+- Stop the laptop backend on EMQX while the pilot runs (only one backend per broker).
+- ABA: whitelist the server IP and set the callback URL.
 
 ---
 
