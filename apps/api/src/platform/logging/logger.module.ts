@@ -3,6 +3,24 @@ import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'crypto';
 import { getCorrelationContext } from './correlation-context';
 
+/** Log fields that must never be written in clear text (secrets, credentials, session tokens). */
+export const LOG_REDACT_PATHS = [
+  'req.headers.authorization',
+  'req.headers["x-admin-key"]',
+  'req.headers.cookie',
+  'res.headers["set-cookie"]',
+  '*.password',
+  '*.apiKey',
+  '*.api_key',
+  '*.hash',
+  '*.qrString',
+  '*.qr_string',
+  '*.WIFI_PASSWORD',
+  '*.MQTT_PASSWORD',
+  '*.secret',
+  '*.authSecret',
+];
+
 @Module({
   imports: [
     PinoLoggerModule.forRootAsync({
@@ -39,22 +57,7 @@ import { getCorrelationContext } from './correlation-context';
                 };
               },
             },
-            redact: {
-              paths: [
-                'req.headers.authorization',
-                '*.password',
-                '*.apiKey',
-                '*.api_key',
-                '*.hash',
-                '*.qrString',
-                '*.qr_string',
-                '*.WIFI_PASSWORD',
-                '*.MQTT_PASSWORD',
-                '*.secret',
-                '*.authSecret',
-              ],
-              censor: '[REDACTED]',
-            },
+            redact: { paths: LOG_REDACT_PATHS, censor: '[REDACTED]' },
             transport: !isProduction
               ? {
                   target: 'pino-pretty',
