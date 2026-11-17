@@ -46,6 +46,9 @@ export const configSchema = z.object({
   // Operator/admin REST access before Phase 6 (header X-Admin-Key). Required outside APP_ENV=local
   // for refund endpoints to work; unset = those endpoints are disabled.
   ADMIN_API_KEY: z.string().min(32).optional(),
+  // /metrics outside APP_ENV=local: header `Authorization: Bearer <METRICS_TOKEN>` (Plan C7: internal only).
+  // Unset = /metrics is disabled (404) outside local.
+  METRICS_TOKEN: z.string().min(32).optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_CHAT_ID: z.string().optional(),
   SENTRY_DSN: z.string().optional(),

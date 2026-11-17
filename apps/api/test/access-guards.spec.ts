@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ExecutionContext, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
-import { AdminKeyGuard, LocalOnlyGuard } from '../src/platform/security/access.guards';
+import { AdminKeyGuard, LocalOnlyGuard, MetricsTokenGuard } from '../src/platform/security/access.guards';
 import { ConfigService } from '../src/platform/config/config.service';
 import { configSchema } from '../src/platform/config/config.schema';
 
@@ -54,5 +54,24 @@ describe('Config safety', () => {
 
   it('rejects an ADMIN_API_KEY shorter than 32 chars', () => {
     expect(() => configSchema.parse({ ADMIN_API_KEY: 'short' })).toThrow();
+  });
+});
+
+describe('MetricsTokenGuard (Plan C7: /metrics internal only)', () => {
+  const TOKEN = 't'.repeat(40);
+
+  it('is open in local', () => {
+    expect(new MetricsTokenGuard(config({ APP_ENV: 'local' })).canActivate(ctx())).toBe(true);
+  });
+
+  it('is hidden (404) on servers when METRICS_TOKEN is not configured', () => {
+    expect(() => new MetricsTokenGuard(config({ APP_ENV: 'production' })).canActivate(ctx())).toThrow(NotFoundException);
+  });
+
+  it('needs the bearer token on servers', () => {
+    const guard = new MetricsTokenGuard(config({ APP_ENV: 'production', METRICS_TOKEN: TOKEN }));
+    expect(() => guard.canActivate(ctx())).toThrow(NotFoundException);
+    expect(() => guard.canActivate(ctx({ authorization: 'Bearer wrong' }))).toThrow(NotFoundException);
+    expect(guard.canActivate(ctx({ authorization: `Bearer ${TOKEN}` }))).toBe(true);
   });
 });
