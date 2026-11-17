@@ -1,2 +1,4 @@
 # Prisma checksums migration files: keep identical bytes on every OS
 apps/api/prisma/migrations/** text eol=lf
+# Shell scripts run on the Linux pilot server
+*.sh text eol=lf

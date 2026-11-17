@@ -1,0 +1,10 @@
+# HTTPS in front of the API. Caddy gets a free Let's Encrypt certificate automatically.
+# PUBLIC_HOST comes from .env, e.g. 152-67-1-23.sslip.io (free name that points to the server IP)
+{$PUBLIC_HOST} {
+	encode gzip
+
+	# /metrics is for Prometheus only (also protected by METRICS_TOKEN in the API)
+	respond /metrics 404
+
+	reverse_proxy api:3000
+}
