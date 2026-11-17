@@ -9,8 +9,8 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 3.5: Early pilot 🟦** (laptop/PC pilot chosen, files + rehearsal done; user to run it). Phase 3 needs STM32-reboot + 2 h offline check; Phase 5 needs the Telegram unplug check |
-| **Next action** | User runs the laptop pilot: `readmePhase3_5-laptop.md` Parts A–D, then the ESP32 payment check (C4) |
+| **Current phase** | **Phase 3.5: Early pilot 🟦** (laptop pilot running; ESP32 payment check passed 2026-11-17; weekly log open). Phase 3 needs STM32-reboot + 2 h offline check; Phase 5 needs the Telegram unplug check |
+| **Next action** | Keep the pilot running; weekly pilot notes. Parallel: Telegram check, ABA questions, STM32 UART |
 | **Last updated** | 2026-11-17 by Claude |
 | **Last commit** | `15c0467` (merge of `feat/phase-3.5-pilot`) |
 
@@ -51,6 +51,11 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
 
 > **2026-11-17 review of Phases 6–8:** see the handoff note of that date — the Phase 7 migration did not apply on any database before the fix.
+
+### Phase 3.5: Early pilot (laptop / PC)
+- [x] `[MANUAL CHECK]` One machine taking (simulator) payments end to end on the pilot — 2026-11-17, real ESP32 + ABA sandbox on the laptop pilot: payment `mwk7dd2890fe15f6ef` PAID → DISPENSED (an earlier open payment was cancelled correctly by the new `pay/request`)
+- [ ] Pilot log started (weekly notes in `docs/PROGRESS.md`)
+- [x] `PROGRESS.md` updated with handoff note
 
 ### Phase 8: Observability (completed)
 - [x] One payment followed in a single trace (MQTT -> DB -> ABA -> Outbox -> Relay -> Publish)
@@ -128,7 +133,7 @@ Things an AI agent can't do. A person does them, then ticks the box.
 | Move your real `secrets.h` from the old `esp32-gateway/include/` to `firmware/esp32-gateway/include/` (git-ignored; Phase 0 moved the folder but not this file) | 3 | Backend developer | ✅ |
 | Existing local dev databases (created with `db push`): run `pnpm --filter @wrm/api exec prisma migrate resolve --applied 20261111000000_init`, then `pnpm --filter @wrm/api db:deploy` | 3 | Each developer | ⬜ |
 | Before the pilot: generate `ADMIN_API_KEY` (≥ 32 chars) for staging/production `.env` and keep it private | 3.5 | Backend developer | ⬜ |
-| Run the laptop pilot (`readmePhase3_5-laptop.md` A–D) and the ESP32 payment check C4; keep `apps/api/.env` on local Mosquitto meanwhile | 3.5 | Backend developer | ⬜ |
+| Run the laptop pilot (`readmePhase3_5-laptop.md` A–D) and the ESP32 payment check C4; keep `apps/api/.env` on local Mosquitto meanwhile | 3.5 | Backend developer | ✅ 2026-11-17 (keep Mosquitto while the pilot runs) |
 | Confirm the first GitHub Actions run of the new CI workflow is green (could not be run from the review machine) | 3 | Backend developer | ✅ |
 | Flash ESP32 **v0.5.0**, then run Phase 4 checks: price change → `CFG,OK`; offline within 3 min of power loss (`readmePhase4.md` §3) | 4 | Backend developer | ✅ 2026-11-12 (v0.5.1) |
 | EMQX `wrm-backend` password was committed in `424e5e6`: changed in the EMQX console 2026-11-12 | — | Backend developer | ✅ |
@@ -177,6 +182,23 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-17: Phase 3.5 laptop pilot running + log leak fix (Claude) — on `fix/log-redaction`
+
+**Done this session**
+- Laptop pilot started for real (EMQX + ABA sandbox). `apps/api/.env` switched to local Mosquitto (backup `apps/api/before-pilot.env`); pilot ABA key taken from the old `backend/.env` (the `apps/api/.env` one was a short placeholder, that file is in `mock` mode). Machines seeded; admin `owner@wrm.kh`, password in git-ignored `infra/pilot/admin-login.env`.
+- **DoD check passed**: real ESP32 payment PAID → DISPENSED on the pilot.
+- **Security fix**: HTTP logs printed `x-admin-key`, `cookie` and `set-cookie` in clear text. Added to the redact list (`LOG_REDACT_PATHS`) + test `test/log-redaction.spec.ts`. Full suite 36 files / 244 tests green. Leaked pilot admin key rotated, the 2 leaked sessions deleted, pilot rebuilt.
+
+**Not finished / next steps**
+1. Merge `fix/log-redaction`, then rebuild the pilot from `main` (`laptop.ps1 start`).
+2. Weekly pilot log.
+
+**Known issues**
+- `CONFIG_REJECTED: UNKNOWN` warning alert on WRM-001 at connect: no STM32 attached, so nothing answers `CFG`. Expected until the STM32 is wired (type `cfg,ok` in the ESP32 menu to fake it).
+- `/health/live` is logged at info every 30 s (Docker healthcheck), noisy.
 
 ---
 
