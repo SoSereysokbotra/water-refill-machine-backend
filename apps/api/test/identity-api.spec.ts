@@ -6,6 +6,9 @@ import { AuthenticatedUser } from '../src/platform/security/authenticated-user';
 import { BadRequestException } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 
+// Production-like config: cookie must be secure and live SESSION_TTL_DAYS
+const configStub = { get: (k: string) => ({ APP_ENV: 'production', SESSION_TTL_DAYS: 7 } as Record<string, unknown>)[k] } as any;
+
 describe('Identity Controllers Unit & Contract Tests', () => {
   let authService: any;
   let usersService: any;
@@ -31,7 +34,7 @@ describe('Identity Controllers Unit & Contract Tests', () => {
 
   describe('AuthController', () => {
     it('POST /v1/auth/login validates body and sets session cookie', async () => {
-      const controller = new AuthController(authService, usersService);
+      const controller = new AuthController(authService, usersService, configStub);
       const expiresAt = new Date(Date.now() + 7 * 86400 * 1000);
       authService.login.mockResolvedValue({
         token: 'session_mock123',
@@ -56,20 +59,24 @@ describe('Identity Controllers Unit & Contract Tests', () => {
         ipAddress: '127.0.0.1',
         userAgent: 'TestAgent',
       });
-      expect(setCookie).toHaveBeenCalledWith('wrm_session', 'session_mock123', expect.any(Object));
+      expect(setCookie).toHaveBeenCalledWith(
+        'wrm_session',
+        'session_mock123',
+        expect.objectContaining({ httpOnly: true, secure: true, maxAge: 7 * 24 * 3600 }),
+      );
       expect(res.data.token).toBe('session_mock123');
       expect(res.data.user.email).toBe('admin@wrm.kh');
     });
 
     it('POST /v1/auth/login throws BadRequestException on invalid email', async () => {
-      const controller = new AuthController(authService, usersService);
+      const controller = new AuthController(authService, usersService, configStub);
       await expect(
         controller.login({ email: 'not-an-email', password: 'p' }, {} as any, {} as any),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('POST /v1/auth/logout clears cookie and invalidates session token', async () => {
-      const controller = new AuthController(authService, usersService);
+      const controller = new AuthController(authService, usersService, configStub);
       const clearCookie = vi.fn();
       const mockReq: any = {
         headers: { authorization: 'Bearer session_logout123' },
@@ -83,7 +90,7 @@ describe('Identity Controllers Unit & Contract Tests', () => {
     });
 
     it('GET /v1/auth/me returns current authenticated user', () => {
-      const controller = new AuthController(authService, usersService);
+      const controller = new AuthController(authService, usersService, configStub);
       const currentUser: AuthenticatedUser = {
         id: 'u-1',
         email: 'op@wrm.kh',

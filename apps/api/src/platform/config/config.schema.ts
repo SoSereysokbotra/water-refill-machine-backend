@@ -42,7 +42,11 @@ export const configSchema = z.object({
 
   AUTH_SECRET: z.string().min(16).default('dev_secret_must_change_in_production_32chars'),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(7),
-  AUTH_ENFORCE_IN_LOCAL: z.coerce.boolean().default(false),
+  // z.coerce.boolean() would turn the string "false" into true: accept only true/false/1/0
+  AUTH_ENFORCE_IN_LOCAL: z
+    .enum(['true', 'false', '1', '0'])
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
   // Operator/admin REST access before Phase 6 (header X-Admin-Key). Required outside APP_ENV=local
   // for refund endpoints to work; unset = those endpoints are disabled.
   ADMIN_API_KEY: z.string().min(32).optional(),

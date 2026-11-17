@@ -12,6 +12,7 @@ import {
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { AuthService } from '../application/auth.service';
+import { ConfigService } from '../../../platform/config/config.service';
 import { UsersService } from '../application/users.service';
 import { SessionAuthGuard } from '../../../platform/security/session-auth.guard';
 import { Public } from '../../../platform/security/public.decorator';
@@ -33,6 +34,7 @@ export class AuthController {
   constructor(
     @Inject(AuthService) private readonly authService: AuthService,
     @Inject(UsersService) private readonly usersService: UsersService,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   @Public()
@@ -62,9 +64,12 @@ export class AuthController {
     if (typeof (reply as unknown as { setCookie?: (...args: unknown[]) => void }).setCookie === 'function') {
       (reply as unknown as { setCookie: (...args: unknown[]) => void }).setCookie('wrm_session', result.token, {
         httpOnly: true,
+        // HTTPS-only outside local development (the servers run behind Caddy/TLS)
+        secure: this.config.get('APP_ENV') !== 'local',
         path: '/',
         sameSite: 'lax',
-        maxAge: 7 * 24 * 3600,
+        // same lifetime as the server-side session (SESSION_TTL_DAYS)
+        maxAge: this.config.get('SESSION_TTL_DAYS') * 24 * 3600,
       });
     }
 

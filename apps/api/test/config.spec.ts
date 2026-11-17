@@ -31,3 +31,13 @@ describe('Config Schema Validation', () => {
     expect(parsed.REFUND_MODE).toBe('auto');
   });
 });
+
+describe('AUTH_ENFORCE_IN_LOCAL parsing', () => {
+  it('"false" means false and "true" means true', async () => {
+    const { configSchema } = await import('../src/platform/config/config.schema');
+    expect(configSchema.parse({ AUTH_ENFORCE_IN_LOCAL: 'false' }).AUTH_ENFORCE_IN_LOCAL).toBe(false);
+    expect(configSchema.parse({ AUTH_ENFORCE_IN_LOCAL: 'true' }).AUTH_ENFORCE_IN_LOCAL).toBe(true);
+    expect(configSchema.parse({}).AUTH_ENFORCE_IN_LOCAL).toBe(false);
+    expect(() => configSchema.parse({ AUTH_ENFORCE_IN_LOCAL: 'yes' })).toThrow();
+  });
+});
