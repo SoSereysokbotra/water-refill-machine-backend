@@ -1,93 +1,111 @@
 # Handoff — Water Refill Machine (read this first in a new chat)
 
-Last updated: 2026-11-06. Paste into a new chat: *"Read `HANDOFF.md` and continue."*
+Last updated: **2026-11-17** · `main` at `15c0467` · Paste into a new chat: *"Read `HANDOFF.md`, `CLAUDE.md` and `docs/PROGRESS.md`, then continue."*
+
+This file is the **big picture**. Day-to-day detail lives in [`docs/PROGRESS.md`](docs/PROGRESS.md) (phase table, DoD checklists, handoff notes) and the master plan [`docs/04-Cloud-and-Payment/backend-implementation-plan.md`](docs/04-Cloud-and-Payment/backend-implementation-plan.md). Rules for AI agents: [`CLAUDE.md`](CLAUDE.md).
+
+---
 
 ## 1. Project in one paragraph
 
-IoT cashless water refill vending machine (Cambodia). Customer picks 500 / 750 / 1000 mL → pays with **ABA PayWay KHQR** → machine dispenses. Two-chip design:
+Cashless water refill vending machine (Cambodia). Customer picks 500 / 750 / 1000 mL → pays with **ABA PayWay KHQR** → machine dispenses.
 
 ```text
-STM32 (hardware control, Keil)  <--UART 115200 8N1-->  ESP32 WROOM-32 (gateway)  <--MQTT/TLS 8883-->  EMQX Cloud  <-->  Backend (Node)  <-->  ABA PayWay
+STM32 (hardware, Keil) ─UART 115200─ ESP32 WROOM-32 (gateway) ─MQTT/TLS 8883─ EMQX Cloud ─ Backend (NestJS) ─HTTPS─ ABA PayWay
+                                                                                              └─ Dashboard (Next.js)
 ```
+- **User** = backend + ESP32 (VS Code, PlatformIO). Prefers simple, step-by-step English.
+- **Teammate** = STM32 firmware in Keil (LCD QR, pump, valves, sensors). Has also built backend phases with an AI agent ("Antigravity"/Gemini).
+- GitHub: `SoSereysokbotra/water-refill-machine-backend`, branch `main`, CI = GitHub Actions (green as of the last check).
 
-- **The user** owns: backend + ESP32 gateway (VS Code + PlatformIO).
-- **Teammate** owns: STM32 firmware in Keil (pump, valves, sensors, LCD QR display).
-- GitHub: `SoSereysokbotra/water-refill-machine-backend` (branch `main`).
+---
 
-## 2. Current status (what works today)
+## 2. Status (2026-11-17)
 
-| Area | Status |
+| Phase | Status | Notes |
+|---|---|---|
+| 0 Foundations · 1 Platform | ✅ | |
+| 2 Payments | ✅ | Hardware-checked 2026-11-12 (real ESP32 + ABA sandbox) |
+| 3 Dispensing & refunds | 🟦 | Only open: `[MANUAL CHECK]` STM32 reboot + 2 h offline (needs the STM32) |
+| **3.5 Early pilot** | 🟦 **next** | User chose the **laptop / always-on PC** pilot (no card for Oracle). Guide `readmePhase3_5-laptop.md`, rehearsed 2026-11-17; the user still has to run it |
+| 4 Fleet | ✅ | Hardware-checked (CFG price change, offline in 53 s) |
+| 5 Monitoring | 🟦 | Code done + reviewed; open: `[MANUAL CHECK]` Telegram alert (needs bot token/chat id) |
+| 6 Identity · 7 Reporting & dashboard · 8 Observability | ✅ | Built by teammate, **reviewed + fixed 2026-11-17** (broken migration, impersonation hole, public `/metrics`, …) |
+| 9 Production deployment | ⬜ | |
+| 10 Hardening & go-live | ⬜ | Needs ≥ 8 weeks of pilot data |
+| 11 OTA updates | ⬜ | After go-live |
+
+Firmware on the user's ESP32: **v0.5.1** (`firmware/esp32-gateway`). Full test suite: **35 files / 242 tests** green on `main`.
+
+---
+
+## 3. Next steps to finish the project (in order)
+
+### Step 1 — Phase 3.5: run the pilot on the user's PC
+- **Decision 2026-11-17: laptop / always-on PC** (Oracle needs a card). Guide: `readmePhase3_5-laptop.md` (`infra/pilot/docker-compose.laptop.yml` override + `infra/pilot/scripts/laptop.ps1` start|status|logs|seed|backup|restore|tunnel|stop). Plain HTTP on `127.0.0.1:8080`, payments confirmed by polling ABA; optional Cloudflare quick tunnel for callbacks.
+- User runs Parts A–D, then the DoD check (ESP32 `1` → pay → PAID → `d` → DISPENSED). Then start the weekly pilot log in `PROGRESS.md`.
+- Oracle stays the plan for later (`readmePhase3_5.md`); moving = backup on the PC → `restore.sh` on the server → stop the PC pilot.
+
+Earlier notes (before the decision):
+- Plan was **Oracle Cloud Always Free** (Singapore ARM VM, $0). Oracle requires a card for identity verification (≈ $1 hold, refunded).
+- Options given to the user (they have not chosen yet):
+  1. **ABA virtual Visa/Mastercard** from the ABA Mobile app → retry Oracle signup (Oracle sometimes rejects virtual/prepaid cards).
+  2. Borrow a family/teammate card for verification only (stay on Always Free, never "Upgrade").
+  3. **No card:** run the same pilot stack on the user's laptop / an always-on PC (`infra/pilot` works on any Docker host; ESP32 reaches EMQX from anywhere; ABA sandbox already worked from the user's connection). Downside: the PC must stay on. If chosen: write a short "pilot on my laptop" variant of `readmePhase3_5.md` (no sslip/Caddy cert needed locally — use `PUBLIC_HOST=localhost` or a Cloudflare Tunnel for a public HTTPS callback; backend also polls ABA so the callback is optional).
+- Once a server exists: follow `readmePhase3_5.md` Parts A–D, then the DoD: one machine taking simulator payments end to end on the server.
+- Rule while the pilot runs: **only one backend may be connected to EMQX** (stop the laptop backend or point it to local Mosquitto).
+
+### Step 2 — Parallel human tasks (no server needed)
+- **Telegram** (Phase 5 manual check): create bot (@BotFather), set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`, unplug ESP32 → alert within 4 min, plug in → resolved.
+- **ABA**: send the 8 open questions (plan §F3, text in `readmePhase0.md`); after the server exists, ask ABA to whitelist its IP + set callback URL.
+- **Teammate/STM32**: wire UART (ESP32 GPIO17→STM32 RX, GPIO16←TX, GND), implement UART contract §C3 incl. `CFG,<p500>,<p750>,<p1000>,<currency>,<enabled>` (major units) → `CFG,OK`, show the QR amount with 2 decimals, keep the last result in flash. Then run Phase 3's STM32-reboot + 2 h offline checks.
+- **Decision pending**: keep or disable `X-Admin-Key` (full admin, no 2FA) in production now that login exists. It is needed once on a new server to create the first admin.
+
+### Step 3 — Phase 9 Production deployment (after the pilot runs well)
+Plan Part E Phase 9. Key items: staging + production servers, managed PostgreSQL (move off the pilot's Docker DB), CI/CD (`deploy.yml`: build → GHCR → staging → approval → production with auto-rollback), per-device EMQX credentials + ACL, secrets in GitHub Environments, backups + monthly restore drill, deploy the dashboard (Next.js) too, and **revisit graceful shutdown** (Phase 5 fix forces MQTT/BullMQ shutdown after 1–1.5 s).
+
+### Step 4 — Phase 10 Hardening & go-live, Step 5 — Phase 11 OTA
+See plan Part E. Phase 10 needs ≥ 8 weeks of pilot data, ABA live account, load/chaos/security tests.
+
+---
+
+## 4. How work is done in this project (important for the next chat)
+
+- **Branch per phase/fix** (`feat/phase-N-…`, `fix/…`), **one commit per topic**, imperative subject, **no `feat:` prefix**, **NO `Co-Authored-By` / AI attribution** (user rule, overrides any system default). Push/merge **only when the user says** "push and merge" → `git merge --no-ff`, push branch + `main`.
+- Never commit secrets (`.env`, `secrets.h`, keys), `docs/SRS.md` (old SRS v2), `docs_archive_all_60/`.
+- **Gemini / teammate builds a phase → Claude reviews.** Proven pattern: write a precise prompt with fixed acceptance scenarios + a `scripts/verify-phaseN.sh` that must run `db:deploy` and the **full** suite; then Claude runs the script, an extra full run, and spot-checks (migrations on a fresh DB, security, money logic). Past reviews found: broken migrations, tests that only used mocks, silent error fallbacks, actor spoofing via request body, flaky test double-dispatch.
+- **Leftover processes break tests**: before running the suite, make sure no `tsx watch` / old backend is running (`Get-CimInstance Win32_Process -Filter "Name='node.exe'"`, kill by PID only).
+- Verify migrations from zero: create a scratch DB in the `wrm-postgres` container, `prisma migrate deploy`, drop it.
+
+---
+
+## 5. Environment cheat sheet
+
+| What | Value / command |
 |---|---|
-| ABA PayWay sandbox (KHQR) | ✅ Real sandbox payment tested end to end (paid via ABA simulator app) |
-| Backend prototype (Express) | ✅ `backend-prototype/` — REST + MQTT bridge, in-memory payments, `/dev` page |
-| EMQX Cloud broker | ✅ `d41b5d19.ala.asia-southeast1.emqxsl.com:8883` (Serverless, spend limit $0) |
-| ESP32 firmware v0.2.0 | ✅ Flashed, MQTT works end to end, test menu + compact terminal QR |
-| STM32 ↔ ESP32 UART wiring | ⏳ Not done yet (teammate side) |
-| Production backend (NestJS) | ⏳ In progress — Phase 0 started |
-| Docs (architecture, deployment, implementation plan v3) | ✅ Committed and pushed |
+| Local infra | Docker Desktop must be running → `docker compose -f infra/docker-compose.yml up -d --wait` |
+| Migrate / seed | `pnpm --filter @wrm/api db:deploy` · `pnpm --filter @wrm/api db:seed` (users only when `APP_ENV=local`) |
+| Tests | `pnpm --filter @wrm/api test` (loads `apps/api/.env` itself) · `test:unit` (no infra) · `test:integration` |
+| Checks | `pnpm run typecheck` · `pnpm run lint` · `pnpm run depcruise` |
+| Backend dev | `pnpm --filter @wrm/api dev` (port 3000; `/health/ready`) |
+| Dashboard | `pnpm --filter ./apps/dashboard dev` (proxies `/v1` to the API) |
+| Local logins (seed) | `admin@wrm.kh` / `AdminPassword123!` (also operator / viewer) — local only |
+| Flash ESP32 | `& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "firmware\esp32-gateway" -t upload -t monitor` (COM7) |
+| ESP32 test menu | `1/2/3` pay · `d` done · `s` status · `cfg,ok` fake STM32 · `i` invert QR |
+| EMQX | `d41b5d19.ala.asia-southeast1.emqxsl.com:8883`, backend user `wrm-backend` (password changed 2026-11-12, it had leaked in git history), ESP32 user `wrm-esp32-001`, machine `WRM-001` |
+| ABA | sandbox merchant `ec480065`, USD only in sandbox, prices 0.15 / 0.20 / 0.25 |
+| `apps/api/.env` (user's laptop) | currently points to **EMQX Cloud** + `PAYWAY_MODE=sandbox` (for ESP32 tests). Integration tests still pass with it. |
+| Pilot files | `apps/api/Dockerfile`, `infra/pilot/*`, guides `readmePhase3_5-laptop.md` (chosen) and `readmePhase3_5.md` (Oracle) |
 
-Teammate has been told the ESP32 + MQTT test works.
+Secrets live only in git-ignored files: `apps/api/.env`, `infra/pilot/.env` (on the server), `firmware/esp32-gateway/include/secrets.h`, old `backend/.env`. Never print or paste them.
 
-## 3. Repo map
+---
 
-```text
-backend-prototype/       Prototype backend (ESM, Express 5, mqtt 5, qrcode). Tests: node --test (3 pass)
-  src/payway.js          ABA client: generateQr / checkTransaction, HMAC-SHA512 Base64 signing
-  src/server.js          REST API, /dev page (latest payment only, create buttons), callback
-  src/mqtt.js            MQTT bridge: pay/request → pay/qr, pushes pay/status every 2.5 s
-  .env                   (git-ignored) sandbox merchant, USD prices, MQTT creds
-certs/emqxsl-ca.crt      DigiCert Global Root G2 (public)
-firmware/esp32-gateway/  PlatformIO project (env esp32dev)
-  src/main.cpp           Wi-Fi, NTP, MQTT (persistent session, LWT), UART2 GPIO16/17, test menu, QR print
-  include/secrets.h      (git-ignored) Wi-Fi + MQTT creds, MACHINE_ID=WRM-001
-  lib/qrcodegen/         nayuki v1.8.0 (vendored)
-docs/                    See docs/README.md index
-docs_archive_all_60/     Old docs — git-ignored, NEVER commit
-docs/SRS.md              Untracked duplicate of docs/01-Project-Overview/srs.md — leave uncommitted
-```
+## 6. Open issues to remember
 
-Key docs:
-- `docs/04-Cloud-and-Payment/backend-implementation-plan.md` (v3) — **the master plan**: invariants, error catalog, state machine (C1), MQTT contract (C2), UART contract (C3), Prisma schema (C6), REST (C7), fault codes (C8), code patterns (D1–D7), Phases 0–11 (Part E), open questions (F3).
-- `docs/04-Cloud-and-Payment/backend-architecture.md`, `docs/06-Testing-and-Operations/deployment.md` — synced to v3.
-- `docs/01-Project-Overview/product-architecture-roadmap.md` — product roadmap.
-- `docs/04-Cloud-and-Payment/stm32-qr-payment-integration.md` — older HTTP-based STM32 guide.
-- `firmware/esp32-gateway/README.md`, `backend-prototype/README.md` — setup + run instructions.
-
-## 4. How to run
-
-Backend prototype:
-```powershell
-cd backend-prototype; npm run dev     # http://localhost:3000/dev
-npm test
-```
-ESP32 flash + monitor (board on COM7):
-```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -d "firmware\esp32-gateway" -t upload -t monitor
-```
-Menu: `1/2/3` pay 500/750/1000, `q` reshow QR, `d` dispense done, `i` invert QR, `s` status, `h` help.
-
-If port 3000 is stuck: find PID with `netstat -ano | findstr :3000` and kill that PID only (killing all node.exe is blocked).
-
-## 5. Decisions already made (don't re-litigate)
-
-- **ABA:** sandbox `https://checkout-sandbox.payway.com.kh`; currency **USD** (sandbox rejects KHR, code 12); prices 0.15/0.20/0.25; `lifetime` minutes ≥ 3; check hash = `req_time + merchant_id + tran_id`; empty optional fields omitted from body but hashed as `""`. Codes: check `6` = not paid yet, generate `403` = duplicate tran_id. `payment_status_code` 0 approved, 2 pending, 3 declined, 4 refunded, 7 cancelled. Production needs IP whitelisting (static IP).
-- **MQTT:** EMQX Cloud, TLS 8883, QoS 1, persistent sessions, Last Will on `wrm/<id>/online`. ESP32 uses PubSubClient (MQTT 3.1.1 → no v5 expiry; ESP32 discards stale QRs itself). Backend user `wrm-backend`, ESP32 user `wrm-esp32-001`.
-- **Production stack:** TypeScript, NestJS (Fastify), PostgreSQL + Prisma, Redis + BullMQ, Next.js dashboard. Modular monolith; DDD + Hexagonal for core (Payments, Dispensing), 2-layer for supporting (Fleet, Monitoring, Identity, Reporting); CQRS-light; transactional outbox (250 ms relay, batch 20, `FOR UPDATE SKIP LOCKED`); DB-driven sweeps; idempotency `(machine_id, request_id)`; one open payment per machine; `REFUND_MODE` manual|auto; `RUN_MODE` all|api|worker.
-- **Deployment:** Docker Compose on Singapore VPS (static IP) + Caddy + managed Postgres, no PgBouncer at start; GitHub Actions + GHCR; local/staging/production; Phase 3.5 early pilot with 1 machine.
-- Volume tiers fixed at 500/750/1000 mL. One admin with ABA portal access handles refunds.
-
-## 6. User rules (must follow)
-
-- **Git commits:** separate commit per topic (never one commit for everything). **Do NOT add any `Co-Authored-By: Claude ...` line** to commit messages. Short imperative subject, e.g. `Add backend implementation plan (v3)`.
-- Never commit secrets: `backend-prototype/.env`, `firmware/esp32-gateway/include/secrets.h`. Never commit `docs_archive_all_60/` or `docs/SRS.md`.
-- Don't ask the user to paste passwords in chat. Sandbox ABA credentials were exposed earlier → rotate before production.
-- The user prefers simple, step-by-step explanations (English is not their first language).
-- Commit/push only when the user asks.
-
-## 7. Next steps (pick up here)
-
-1. **Send ABA the 8 open questions** in plan §F3 (and teammate questions 9–10 there).
-2. **Teammate:** read plan §C3 (UART contract v1) and §C8 (fault codes) on GitHub; implement UART on STM32, wire GPIO17→RX, GPIO16←TX, common GND.
-3. **Update ESP32 firmware to UART contract v1** when STM32 side is ready (`PAID,ACK`/`PAID,REJECT`, `ACK,<tran_id>`, `CFG`, `PONG,<state>,<tran_id>,<tank>,<fault>`, `transaction/ack`, `config/ack`). Current firmware uses the simpler v0 protocol in `firmware/esp32-gateway/README.md` §4.
-4. **Start Phase 0 — Foundations** of the implementation plan (new NestJS repo layout per §B1 "Target repository layout") when the user says go. Then Phase 1 Platform → Phase 2 Payments (cut-over from prototype) → Phase 3 → Phase 3.5 pilot. Go-live ≈ week 20.
-5. Optional/abandoned: Notion workspace ("Water Refill Machine — Project Workspace", page id `40c58ff48cda8187bd0eee17adcc341a`) has Phases, Milestones, Sprint Tasks, BOM, Test Cases, Meetings, and 30/60 Documentation pages. Not continued.
+- Phase 3.5 runs PostgreSQL in Docker on the server (free); move to a managed DB before real money (Phase 9).
+- Audit rows are written after the action, outside its transaction (a failed audit write is swallowed).
+- No ABA circuit breaker yet (only a metric); `REFUND_MODE=auto` has no executor (refunds are manual) — ABA refund API unconfirmed.
+- Dispensing logic lives inside the `payments` context (plan wanted a separate `dispensing` context) — accepted deviation.
+- Graceful shutdown uses forced timeouts (see Step 3).
+- `docs/04-Cloud-and-Payment/backend-backlog-*.{md,csv}` were added by Gemini (optional planning docs, kept).

@@ -11,6 +11,8 @@ API ──MQTT/TLS──▶ EMQX Cloud ◀── ESP32        API ──HTTPS─
 
 Cost: **$0** (Oracle Always Free). EMQX Serverless and the ABA sandbox stay as they are.
 
+> **No card for Oracle?** Run the same pilot on your own PC instead: [`readmePhase3_5-laptop.md`](readmePhase3_5-laptop.md).
+
 > Tested before writing this guide: the same Docker setup was started from an empty database, all migrations applied, `/health/ready` was OK through HTTPS, `/metrics` and dev routes were hidden, login + secure cookie worked.
 
 ---
