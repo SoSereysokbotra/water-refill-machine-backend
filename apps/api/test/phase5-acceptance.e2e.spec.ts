@@ -428,17 +428,21 @@ describe('Phase 5 Acceptance (E2E)', () => {
     const targetAlert = list.find((a: any) => a.machineId === MACHINE_ID);
     expect(targetAlert).toBeDefined();
 
-    // Valid ack
-    const ackRes = await req('POST', `/v1/alerts/${targetAlert.id}/ack`, { actorId: 'alice' });
+    // Ack: the actor is the logged-in user (locally the dev admin), a body actorId is ignored (Phase 6)
+    const ackRes = await req('POST', `/v1/alerts/${targetAlert.id}/ack`, { actorId: 'mallory' });
     expect(ackRes.statusCode).toBe(201);
     const acked = ackRes.json();
     expect(acked.status).toBe('acknowledged');
-    expect(acked.acknowledgedBy).toBe('alice');
+    expect(acked.acknowledgedBy).toBe('usr-dev-admin');
 
-    // Missing actorId -> 400 VALIDATION_FAILED
-    const badRes = await req('POST', `/v1/alerts/${targetAlert.id}/ack`, {});
-    expect(badRes.statusCode).toBe(400);
-    expect(badRes.json().error.code).toBe('VALIDATION_FAILED');
+    // Without a session (local fallback disabled) -> 401
+    const badRes = await app.inject({
+      method: 'POST',
+      url: `/v1/alerts/${targetAlert.id}/ack`,
+      payload: {},
+      headers: { 'x-enforce-auth': 'true' },
+    });
+    expect(badRes.statusCode).toBe(401);
   });
 
   // 10. No Telegram config

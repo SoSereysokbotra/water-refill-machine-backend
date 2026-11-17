@@ -56,6 +56,26 @@ export class AdminKeyGuard implements CanActivate {
   }
 }
 
+/**
+ * /metrics (Plan C7: internal only). Open in APP_ENV=local; elsewhere it needs
+ * `Authorization: Bearer <METRICS_TOKEN>` and is hidden (404) when no token is configured.
+ */
+@Injectable()
+export class MetricsTokenGuard implements CanActivate {
+  constructor(@Inject(ConfigService) private readonly config: ConfigService) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    if (this.config.get('APP_ENV') === 'local') return true;
+    const expected = this.config.get('METRICS_TOKEN');
+    if (!expected) throw new NotFoundException();
+    const request = context.switchToHttp().getRequest<{ headers: Record<string, string | string[] | undefined> }>();
+    const auth = request.headers.authorization;
+    const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    if (!token || !safeEqual(token, expected)) throw new NotFoundException();
+    return true;
+  }
+}
+
 function safeEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');

@@ -71,8 +71,9 @@ export interface RefundQueueReportItem {
   currency: string;
   refundStatus: string;
   refundReason: string;
+  suggestedAmountMinor: number;
+  refundedAmountMinor: number | null;
   claimantId: string | null;
-  claimedAt: Date | null;
   expiresAt: Date | null;
   decisionReason: string | null;
   machineOnline: boolean;
@@ -144,8 +145,9 @@ interface RawRefundQueueRow {
   currency: string;
   refund_status: string;
   refund_reason: string;
+  suggested_amount_minor: number | string;
+  refunded_amount_minor: number | string | null;
   claimant_id: string | null;
-  claimed_at: Date | null;
   expires_at: Date | null;
   decision_reason: string | null;
   machine_online: boolean;
@@ -207,13 +209,8 @@ export class ReportingService {
       }
       sql += ' ORDER BY date DESC, machine_id ASC';
 
-      let rawRows: RawSalesByMachineRow[] = [];
-      try {
-        rawRows = await this.prisma.$queryRawUnsafe<RawSalesByMachineRow[]>(sql, ...params);
-      } catch (err) {
-        this.logger.warn(`Failed to query sales_by_machine, fallback to direct query: ${(err as Error).message}`);
-        rawRows = await this.queryDirectSalesByMachine(query);
-      }
+      // No silent fallback: the view is created by the Phase 7 migration; a failure must surface.
+      const rawRows = await this.prisma.$queryRawUnsafe<RawSalesByMachineRow[]>(sql, ...params);
 
       allRows = rawRows.map((r) => ({
         date: formatDate(r.date),
@@ -241,13 +238,7 @@ export class ReportingService {
       }
       sql += ' ORDER BY date DESC';
 
-      let rawRows: RawSalesDailyRow[] = [];
-      try {
-        rawRows = await this.prisma.$queryRawUnsafe<RawSalesDailyRow[]>(sql, ...params);
-      } catch (err) {
-        this.logger.warn(`Failed to query sales_daily, fallback to direct query: ${(err as Error).message}`);
-        rawRows = await this.queryDirectSalesDaily(query);
-      }
+      const rawRows = await this.prisma.$queryRawUnsafe<RawSalesDailyRow[]>(sql, ...params);
 
       allRows = rawRows.map((r) => ({
         date: formatDate(r.date),
@@ -312,33 +303,9 @@ export class ReportingService {
   }
 
   async getFleetStatus(): Promise<MachineStatusReportRow[]> {
-    let rows: RawMachineStatusRow[] = [];
-    try {
-      rows = await this.prisma.$queryRawUnsafe<RawMachineStatusRow[]>(`
-        SELECT * FROM machine_status_view ORDER BY id ASC;
-      `);
-    } catch (err) {
-      this.logger.warn(`Failed to query machine_status_view, falling back to direct join: ${(err as Error).message}`);
-      rows = await this.prisma.$queryRawUnsafe<RawMachineStatusRow[]>(`
-        SELECT
-            m.id,
-            m.name,
-            m.location,
-            m.enabled,
-            m.currency,
-            m.online,
-            m.last_seen_at,
-            m.pending_outcomes,
-            m.pending_outcomes_since,
-            m.last_stm32_state,
-            m.decommissioned_at,
-            COUNT(a.id) FILTER (WHERE a.status = 'active')::INTEGER AS active_alerts_count
-        FROM machines m
-        LEFT JOIN alerts a ON a.machine_id = m.id
-        GROUP BY m.id
-        ORDER BY m.id ASC;
-      `);
-    }
+    const rows = await this.prisma.$queryRawUnsafe<RawMachineStatusRow[]>(`
+      SELECT * FROM machine_status_view ORDER BY id ASC;
+    `);
 
     return rows.map((r) => ({
       id: r.id,
@@ -361,39 +328,12 @@ export class ReportingService {
     const params: unknown[] = [];
     if (query.status) {
       params.push(query.status);
-      sql += ` AND refund_status = $${params.length}`;
+      // refund_status is a Postgres enum; compare as text (the controller validates the value)
+      sql += ` AND refund_status::text = $${params.length}`;
     }
     sql += ' ORDER BY created_at DESC;';
 
-    let rawRows: RawRefundQueueRow[] = [];
-    try {
-      rawRows = await this.prisma.$queryRawUnsafe<RawRefundQueueRow[]>(sql, ...params);
-    } catch (err) {
-      this.logger.warn(`Failed to query refund_queue_view, falling back to direct join: ${(err as Error).message}`);
-      rawRows = await this.prisma.$queryRawUnsafe<RawRefundQueueRow[]>(`
-        SELECT
-            rc.tran_id,
-            p.machine_id,
-            p.amount_minor,
-            p.currency,
-            rc.status AS refund_status,
-            rc.reason AS refund_reason,
-            rc.claimant_id,
-            rc.claimed_at,
-            rc.expires_at,
-            rc.decision_reason,
-            m.online AS machine_online,
-            m.pending_outcomes AS machine_pending_outcomes,
-            m.last_stm32_state,
-            rc.created_at,
-            rc.updated_at
-        FROM refund_cases rc
-        JOIN payments p ON p.tran_id = rc.tran_id
-        JOIN machines m ON m.id = p.machine_id
-        ${query.status ? 'WHERE rc.status = $1' : ''}
-        ORDER BY rc.created_at DESC;
-      `, ...(query.status ? [query.status] : []));
-    }
+    const rawRows = await this.prisma.$queryRawUnsafe<RawRefundQueueRow[]>(sql, ...params);
 
     const statusCounts = {
       open: 0,
@@ -411,26 +351,29 @@ export class ReportingService {
 
     const items: RefundQueueReportItem[] = rawRows.map((r) => {
       const amount = toNum(r.amount_minor);
+      // Money totals use the refund amounts, not the payment amount (partial refunds)
+      const pending = toNum(r.suggested_amount_minor);
+      const refunded = toNum(r.refunded_amount_minor ?? 0);
       const isUsd = r.currency === 'USD';
 
       if (r.refund_status === 'open') {
         statusCounts.open++;
-        if (isUsd) amounts.usd.pendingMinor += amount;
-        else amounts.khr.pendingMinor += amount;
+        if (isUsd) amounts.usd.pendingMinor += pending;
+        else amounts.khr.pendingMinor += pending;
       } else if (r.refund_status === 'claimed') {
         statusCounts.claimed++;
-        if (isUsd) amounts.usd.pendingMinor += amount;
-        else amounts.khr.pendingMinor += amount;
+        if (isUsd) amounts.usd.pendingMinor += pending;
+        else amounts.khr.pendingMinor += pending;
       } else if (r.refund_status === 'refunded') {
         statusCounts.refunded++;
-        if (isUsd) amounts.usd.refundedMinor += amount;
-        else amounts.khr.refundedMinor += amount;
+        if (isUsd) amounts.usd.refundedMinor += refunded;
+        else amounts.khr.refundedMinor += refunded;
       } else if (r.refund_status === 'rejected') {
         statusCounts.rejected++;
       } else if (r.refund_status === 'auto_failed') {
         statusCounts.autoFailed++;
-        if (isUsd) amounts.usd.pendingMinor += amount;
-        else amounts.khr.pendingMinor += amount;
+        if (isUsd) amounts.usd.pendingMinor += pending;
+        else amounts.khr.pendingMinor += pending;
       }
 
       return {
@@ -440,8 +383,9 @@ export class ReportingService {
         currency: r.currency,
         refundStatus: r.refund_status,
         refundReason: r.refund_reason,
+        suggestedAmountMinor: toNum(r.suggested_amount_minor),
+        refundedAmountMinor: r.refunded_amount_minor === null ? null : toNum(r.refunded_amount_minor),
         claimantId: r.claimant_id,
-        claimedAt: r.claimed_at,
         expiresAt: r.expires_at,
         decisionReason: r.decision_reason,
         machineOnline: r.machine_online,
@@ -507,68 +451,6 @@ export class ReportingService {
     return lines.join('\r\n') + '\r\n';
   }
 
-  private async queryDirectSalesDaily(query: SalesReportQuery): Promise<RawSalesDailyRow[]> {
-    let sql = `
-      SELECT
-          DATE(p.paid_at) AS date,
-          p.currency,
-          COUNT(*)::INTEGER AS total_payments,
-          COUNT(*) FILTER (WHERE p.status = 'DISPENSED')::INTEGER AS dispensed_count,
-          COUNT(*) FILTER (WHERE p.status = 'REFUNDED')::INTEGER AS refunded_count,
-          SUM(p.amount_minor)::BIGINT AS gross_amount_minor,
-          SUM(COALESCE(p.refunded_amount_minor, 0))::BIGINT AS refunded_amount_minor,
-          (SUM(p.amount_minor) - SUM(COALESCE(p.refunded_amount_minor, 0)))::BIGINT AS net_amount_minor,
-          SUM(p.volume_ml)::BIGINT AS total_volume_ml
-      FROM payments p
-      WHERE p.paid_at IS NOT NULL
-    `;
-    const params: unknown[] = [];
-    if (query.from) {
-      params.push(query.from);
-      sql += ` AND p.paid_at >= $${params.length}::date`;
-    }
-    if (query.to) {
-      params.push(query.to);
-      sql += ` AND p.paid_at <= ($${params.length}::date + INTERVAL '1 day')`;
-    }
-    sql += ' GROUP BY DATE(p.paid_at), p.currency ORDER BY DATE(p.paid_at) DESC';
-
-    return this.prisma.$queryRawUnsafe<RawSalesDailyRow[]>(sql, ...params);
-  }
-
-  private async queryDirectSalesByMachine(query: SalesReportQuery): Promise<RawSalesByMachineRow[]> {
-    let sql = `
-      SELECT
-          p.machine_id,
-          DATE(p.paid_at) AS date,
-          p.currency,
-          COUNT(*)::INTEGER AS total_payments,
-          COUNT(*) FILTER (WHERE p.status = 'DISPENSED')::INTEGER AS dispensed_count,
-          COUNT(*) FILTER (WHERE p.status = 'REFUNDED')::INTEGER AS refunded_count,
-          SUM(p.amount_minor)::BIGINT AS gross_amount_minor,
-          SUM(COALESCE(p.refunded_amount_minor, 0))::BIGINT AS refunded_amount_minor,
-          (SUM(p.amount_minor) - SUM(COALESCE(p.refunded_amount_minor, 0)))::BIGINT AS net_amount_minor,
-          SUM(p.volume_ml)::BIGINT AS total_volume_ml
-      FROM payments p
-      WHERE p.paid_at IS NOT NULL
-    `;
-    const params: unknown[] = [];
-    if (query.machineId) {
-      params.push(query.machineId);
-      sql += ` AND p.machine_id = $${params.length}`;
-    }
-    if (query.from) {
-      params.push(query.from);
-      sql += ` AND p.paid_at >= $${params.length}::date`;
-    }
-    if (query.to) {
-      params.push(query.to);
-      sql += ` AND p.paid_at <= ($${params.length}::date + INTERVAL '1 day')`;
-    }
-    sql += ' GROUP BY p.machine_id, DATE(p.paid_at), p.currency ORDER BY DATE(p.paid_at) DESC, p.machine_id ASC';
-
-    return this.prisma.$queryRawUnsafe<RawSalesByMachineRow[]>(sql, ...params);
-  }
 }
 
 function escapeCsvValue(val: unknown): string {

@@ -50,6 +50,8 @@ A phase is ✅ only when **every** Definition of Done item in the plan is ticked
 
 Copy the DoD of the current phase from the plan here and tick items as they are really done and tested.
 
+> **2026-11-17 review of Phases 6–8:** see the handoff note of that date — the Phase 7 migration did not apply on any database before the fix.
+
 ### Phase 8: Observability (completed)
 - [x] One payment followed in a single trace (MQTT -> DB -> ABA -> Outbox -> Relay -> Publish)
 - [x] All Deployment §10 alerts tested by simulation
@@ -59,12 +61,12 @@ Copy the DoD of the current phase from the plan here and tick items as they are 
 - [x] `PROGRESS.md` updated with handoff note
 
 ### Phase 7: Reporting & dashboard (completed)
-- [x] Gross, refunds and net revenue match DB totals for seeded scenarios (both currencies)
-- [x] Refund queue fully operable from the UI and audit-logged
+- [x] Gross, refunds and net revenue match DB totals for seeded scenarios (both currencies) — **verified against the real database only since the 2026-11-17 review** (`test/reporting.integration.spec.ts`; before, only a mocked Prisma was tested and the migration did not apply)
+- [x] Refund queue fully operable from the UI and audit-logged — **fixed 2026-11-17**: the `/reports/refunds` page failed before (broken `refund_queue_view`, broken status filter)
 - [x] `PROGRESS.md` updated with handoff note
 
 ### Phase 6: Identity (code & automated tests complete)
-- [x] Only health, callback and auth reachable without a session
+- [x] Only health, callback and auth reachable without a session — **corrected 2026-11-17**: `/metrics` was public; now Prometheus-only via `METRICS_TOKEN` outside local
 - [x] Every sensitive action audit-logged
 - [x] `PROGRESS.md` updated with handoff note
 
@@ -174,6 +176,27 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-17: Review of Phases 6–8 (Claude) — fixes on `fix/phase-6-8-review`
+
+**Done (one commit per fix)**
+- **Phase 7 migration did not apply on any database**: `refund_queue_view` used non-existent columns (`claimant_id`, `claimed_at`, `expires_at`). Corrected in place (it never applied anywhere): `claimed_by`/`claimed_until`, plus suggested/refunded amounts. Late payments (no `paid_at`, LATE_PAYMENT case) now count as revenue.
+- Reporting no longer hides query errors (4 silent fallbacks removed). Refund-queue totals use refund amounts (not payment amounts); the status filter compared an enum with text and always failed. New real-database test `test/reporting.integration.spec.ts` (the old tests only used a mocked Prisma).
+- **Security**: refund/alert endpoints took `body.actorId` before the session user → any operator could act and be audited as someone else. The actor is now always the authenticated user.
+- `/metrics` was public → outside local it needs `Authorization: Bearer <METRICS_TOKEN>` (404 otherwise); Prometheus reads the token from a file.
+- Session cookie `Secure` outside local and `maxAge` = `SESSION_TTL_DAYS`; `AUTH_ENFORCE_IN_LOCAL=false` was parsed as true (fixed).
+- Seed creates the known-password users only when `APP_ENV=local`.
+
+**Needs from a person / decisions**
+- Each developer DB that tried the broken migration: `pnpm --filter @wrm/api exec prisma migrate resolve --rolled-back 20261114010000_phase7_reporting_views`, then `db:deploy`.
+- Decide whether `X-Admin-Key` (full admin, no 2FA) stays enabled in production now that login exists.
+- Set `METRICS_TOKEN` on servers (and in `/etc/prometheus/metrics_token`).
+
+**Known issues**
+- Audit rows are written after the action, outside its transaction; an audit write failure is swallowed.
+- Phases 6–8 were committed directly on `main` in 4 large commits (no review branch).
 
 ---
 

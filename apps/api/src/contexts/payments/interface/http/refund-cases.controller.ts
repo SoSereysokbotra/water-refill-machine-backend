@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Inject, Optional, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
 import { z } from 'zod';
 import { ConfigService } from '../../../../platform/config/config.service';
 import { SessionAuthGuard, RolesGuard, Roles, CurrentUser, AuthenticatedUser } from '../../../../platform/security';
@@ -18,29 +19,24 @@ import {
 } from '../../application';
 import { AUDIT_LOGGER_PORT, AuditLoggerPort } from '../../../identity/application/public/audit-logger.port';
 
-const ActorId = z.string().trim().min(1).max(64);
 const Reason = z.string().trim().min(1).max(500);
 
 const ListQuery = z.object({
   status: z.enum(['open', 'claimed', 'refunded', 'rejected', 'auto_failed']).optional(),
 });
 const ClaimBody = z.object({
-  actorId: ActorId.optional(),
   durationMinutes: z.number().int().min(1).max(120).optional(),
 });
 const MarkRefundedBody = z.object({
-  actorId: ActorId.optional(),
   method: z.string().trim().min(1).max(64),
   reference: z.string().trim().min(1).max(128),
   amountMinor: z.number().int().positive(),
   adminOverrideReason: Reason.optional(),
 });
 const DecisionBody = z.object({
-  actorId: ActorId.optional(),
   reason: Reason,
 });
 const ResolveUnknownBody = z.object({
-  actorId: ActorId.optional(),
   resolution: z.enum(['dispensed', 'refund']),
   reason: Reason,
   adminOverrideReason: Reason.optional(),
@@ -56,6 +52,16 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   }
   return result.data;
 }
+
+/**
+ * The actor is always the authenticated user (session, X-Admin-Key, or the local dev admin set by
+ * SessionAuthGuard). A body `actorId` is ignored: it let any operator act and be audited as someone else.
+ */
+function actorOf(user?: AuthenticatedUser): string {
+  if (!user) throw new UnauthorizedException('Authentication required');
+  return user.id;
+}
+
 
 /** Operator/admin endpoints protected by SessionAuthGuard and RolesGuard (Plan §C7). */
 @Controller('v1')
@@ -94,8 +100,8 @@ export class RefundCasesController {
     @Body() body: unknown,
     @CurrentUser() user?: AuthenticatedUser,
   ) {
-    const parsed = parse(ClaimBody, body);
-    const actorId = parsed.actorId ?? user?.id ?? 'system';
+    parse(ClaimBody, body);
+    const actorId = actorOf(user);
     const res = await this.claimHandler.execute(
       new ClaimRefundCaseCommand(tranId, actorId, this.config.get('REFUND_CLAIM_MINUTES')),
     );
@@ -118,7 +124,7 @@ export class RefundCasesController {
     @CurrentUser() user?: AuthenticatedUser,
   ) {
     const b = parse(MarkRefundedBody, body);
-    const actorId = b.actorId ?? user?.id ?? 'system';
+    const actorId = actorOf(user);
     const res = await this.markRefundedHandler.execute(
       new MarkRefundedCommand(tranId, actorId, b.method, b.reference, b.amountMinor, b.adminOverrideReason),
     );
@@ -143,7 +149,7 @@ export class RefundCasesController {
     @CurrentUser() user?: AuthenticatedUser,
   ) {
     const b = parse(DecisionBody, body);
-    const actorId = b.actorId ?? user?.id ?? 'system';
+    const actorId = actorOf(user);
     const res = await this.rejectHandler.execute(new RejectRefundCommand(tranId, actorId, b.reason));
 
     await this.audit?.record({
@@ -165,7 +171,7 @@ export class RefundCasesController {
     @CurrentUser() user?: AuthenticatedUser,
   ) {
     const b = parse(DecisionBody, body);
-    const actorId = b.actorId ?? user?.id ?? 'system';
+    const actorId = actorOf(user);
     const res = await this.reopenHandler.execute(new ReopenRefundCommand(tranId, actorId, b.reason));
 
     await this.audit?.record({
@@ -187,7 +193,7 @@ export class RefundCasesController {
     @CurrentUser() user?: AuthenticatedUser,
   ) {
     const b = parse(ResolveUnknownBody, body);
-    const actorId = b.actorId ?? user?.id ?? 'system';
+    const actorId = actorOf(user);
     const res = await this.resolveUnknownHandler.execute(
       new ResolveUnknownDispenseCommand(tranId, actorId, b.resolution, b.reason, b.adminOverrideReason),
     );

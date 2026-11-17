@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Inject, Optional, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { UnauthorizedException } from '@nestjs/common';
 import { AlertStatus } from '@prisma/client';
 import { z } from 'zod';
 import { SessionAuthGuard, RolesGuard, Roles, CurrentUser, AuthenticatedUser } from '../../../platform/security';
@@ -6,8 +7,7 @@ import { ValidationError } from '../../../shared-kernel';
 import { AlertService } from '../application/alert.service';
 import { AUDIT_LOGGER_PORT, AuditLoggerPort } from '../../identity/application/public/audit-logger.port';
 
-const ActorId = z.string().trim().min(1).max(64);
-const ActionBody = z.object({ actorId: ActorId.optional() });
+const ActionBody = z.object({});
 const ListQuery = z.object({
   status: z.enum(['active', 'acknowledged', 'resolved']).optional(),
 });
@@ -22,6 +22,16 @@ function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   }
   return result.data;
 }
+
+/**
+ * The actor is always the authenticated user (session, X-Admin-Key, or the local dev admin set by
+ * SessionAuthGuard). A body `actorId` is ignored: it let any operator act and be audited as someone else.
+ */
+function actorOf(user?: AuthenticatedUser): string {
+  if (!user) throw new UnauthorizedException('Authentication required');
+  return user.id;
+}
+
 
 @Controller('v1/alerts')
 @UseGuards(SessionAuthGuard, RolesGuard)
@@ -44,8 +54,8 @@ export class AlertsController {
     @Body() body: unknown,
     @CurrentUser() user?: AuthenticatedUser,
   ) {
-    const parsed = parse(ActionBody, body);
-    const actorId = parsed.actorId ?? user?.id ?? 'system';
+    parse(ActionBody, body);
+    const actorId = actorOf(user);
     const res = await this.alertService.acknowledgeAlert(id, actorId);
 
     await this.audit?.record({
@@ -64,8 +74,8 @@ export class AlertsController {
     @Body() body: unknown,
     @CurrentUser() user?: AuthenticatedUser,
   ) {
-    const parsed = parse(ActionBody, body);
-    const actorId = parsed.actorId ?? user?.id ?? 'system';
+    parse(ActionBody, body);
+    const actorId = actorOf(user);
     const res = await this.alertService.resolveAlertById(id, actorId);
 
     await this.audit?.record({

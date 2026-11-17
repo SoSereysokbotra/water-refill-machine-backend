@@ -65,8 +65,10 @@ export interface RefundCaseItem {
   currency: string;
   refundStatus: 'open' | 'claimed' | 'refunded' | 'rejected' | 'auto_failed';
   refundReason: string;
+  suggestedAmountMinor: number;
+  refundedAmountMinor: number | null;
   claimantId: string | null;
-  claimedAt: string | null;
+  /** claim expiry (refund_cases.claimed_until) */
   expiresAt: string | null;
   decisionReason: string | null;
   machineOnline: boolean;
@@ -296,12 +298,13 @@ export const api = {
   async getRefundCase(tranId: string) {
     return request<{ data: RefundCaseItem }>(`/refund-cases/${tranId}`);
   },
-  async claimRefund(tranId: string, durationMinutes = 30) {
-    return request<{ data: { tranId: string; claimantId: string; expiresAt: string } }>(
+  // The claim lasts REFUND_CLAIM_MINUTES (server config); the operator comes from the session.
+  async claimRefund(tranId: string) {
+    return request<{ data: { status: 'claimed'; claimedUntil: string } }>(
       `/refund-cases/${tranId}/claim`,
       {
         method: 'POST',
-        body: JSON.stringify({ durationMinutes }),
+        body: JSON.stringify({}),
       },
     );
   },

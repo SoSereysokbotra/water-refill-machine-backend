@@ -4,6 +4,8 @@ import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/platform/database/prisma.service';
 import { GlobalExceptionFilter } from '../src/platform/errors/http-exception.filter';
+import { hash } from '@node-rs/argon2';
+import { AuthService } from '../src/contexts/identity/application/auth.service';
 import {
   ConfirmPaymentCommand,
   ConfirmPaymentHandler,
@@ -21,6 +23,9 @@ describe('Phase 3 E2E Dispensing & Refund Review Flow', () => {
   let prisma: PrismaService;
   const testMachineId = 'WRM-900';
   const targetMachineIds = [testMachineId, 'WRM-001'];
+  // A second real operator (the default local requests act as the dev admin)
+  const BOB = { id: 'usr-test-flow-bob', email: 'bob.flow@test.local', password: 'FlowTest-Password-123!' };
+  let bobToken = '';
 
   beforeAll(async () => {
     app = await NestFactory.create<NestFastifyApplication>(
@@ -36,6 +41,12 @@ describe('Phase 3 E2E Dispensing & Refund Review Flow', () => {
     confirmPaymentHandler = app.get(ConfirmPaymentHandler);
     recordDispenseHandler = app.get(RecordDispenseHandler);
     prisma = app.get(PrismaService);
+
+    await prisma.user.deleteMany({ where: { id: BOB.id } });
+    await prisma.user.create({
+      data: { id: BOB.id, email: BOB.email, name: 'Bob', role: 'admin', passwordHash: await hash(BOB.password) },
+    });
+    bobToken = (await app.get(AuthService).login({ email: BOB.email, password: BOB.password, ipAddress: '127.0.0.1' })).token;
   }, 30000);
 
   beforeEach(async () => {
@@ -56,6 +67,7 @@ describe('Phase 3 E2E Dispensing & Refund Review Flow', () => {
     await prisma.paymentEvent.deleteMany({ where: { payment: { machineId: { in: targetMachineIds } } } });
     await prisma.payment.deleteMany({ where: { machineId: { in: targetMachineIds } } });
     await prisma.dispenseRejection.deleteMany({ where: { machineId: { in: targetMachineIds } } });
+    await prisma.user.deleteMany({ where: { id: BOB.id } }); // sessions cascade
     await app.close();
   });
 
@@ -131,7 +143,7 @@ describe('Phase 3 E2E Dispensing & Refund Review Flow', () => {
     const claimRes = await app.inject({
       method: 'POST',
       url: `/v1/refund-cases/${tranId}/claim`,
-      payload: { actorId: 'operator_alice', durationMinutes: 30 },
+      payload: {},
     });
     expect(claimRes.statusCode).toBe(201);
     const claimData = claimRes.json();
@@ -141,7 +153,8 @@ describe('Phase 3 E2E Dispensing & Refund Review Flow', () => {
     const conflictRes = await app.inject({
       method: 'POST',
       url: `/v1/refund-cases/${tranId}/claim`,
-      payload: { actorId: 'operator_bob', durationMinutes: 30 },
+      payload: {},
+      headers: { authorization: `Bearer ${bobToken}` }, // a different logged-in operator
     });
     expect(conflictRes.statusCode).toBe(409); // CONCURRENCY_CONFLICT / REFUND_ALREADY_CLAIMED
 

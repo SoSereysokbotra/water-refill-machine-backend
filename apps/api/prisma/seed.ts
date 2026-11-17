@@ -76,6 +76,14 @@ export async function seedDatabase() {
     }
   }
 
+  // The default users have passwords written in this file: never create them on a server.
+  const appEnv = process.env.APP_ENV ?? 'local';
+  if (appEnv !== 'local') {
+    console.log(`[Seed] APP_ENV=${appEnv}: default development users NOT created (create real users via /v1/users).`);
+    console.log('[Seed] Seed completed successfully.');
+    return;
+  }
+
   console.log('[Seed] Seeding default development users...');
   const users = [
     {
