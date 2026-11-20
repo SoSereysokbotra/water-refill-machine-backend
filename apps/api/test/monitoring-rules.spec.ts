@@ -401,3 +401,18 @@ describe('Telegram notifier job ids', () => {
     for (const id of jobIds) expect(id).not.toContain(':'); // BullMQ rejects ':' in custom job ids
   });
 });
+
+describe('Telegram notifier retries', () => {
+  it('keeps retrying a failed message for at least 30 minutes (short outages must not lose alerts)', () => {
+    let opts: { attempts: number; backoff: { type: string; delay: number } } | undefined;
+    const queueService = { getQueue: (_name: string, o: typeof opts) => { opts = o; return {}; } };
+    const config = { get: (k: string) => (k === 'RUN_MODE' ? 'api' : undefined) };
+    new TelegramNotifierService(queueService as any, {} as any, config as any).onModuleInit();
+
+    expect(opts!.backoff.type).toBe('exponential');
+    // BullMQ exponential backoff: delay * 2^(n-1) before retry n
+    let totalMs = 0;
+    for (let n = 1; n < opts!.attempts; n++) totalMs += opts!.backoff.delay * 2 ** (n - 1);
+    expect(totalMs).toBeGreaterThanOrEqual(30 * 60 * 1000);
+  });
+});
