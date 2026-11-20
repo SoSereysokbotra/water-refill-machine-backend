@@ -29,7 +29,7 @@ STM32 (hardware, Keil) ─UART 115200─ ESP32 WROOM-32 (gateway) ─MQTT/TLS 88
 | 3 Dispensing & refunds | 🟦 | Only open: `[MANUAL CHECK]` STM32 reboot + 2 h offline (needs the STM32) |
 | **3.5 Early pilot** | 🟦 **next** | User chose the **laptop / always-on PC** pilot (no card for Oracle). Guide `readmePhase3_5-laptop.md`, rehearsed 2026-11-17; the user still has to run it |
 | 4 Fleet | ✅ | Hardware-checked (CFG price change, offline in 53 s) |
-| 5 Monitoring | 🟦 | Code done + reviewed; open: `[MANUAL CHECK]` Telegram alert (needs bot token/chat id) |
+| 5 Monitoring | ✅ | Telegram check passed 2026-11-20 on the laptop pilot (bot `@WaterRefilMachinebot`); alert reopen + retry fixes |
 | 6 Identity · 7 Reporting & dashboard · 8 Observability | ✅ | Built by teammate, **reviewed + fixed 2026-11-17** (broken migration, impersonation hole, public `/metrics`, …) |
 | 9 Production deployment | ⬜ | |
 | 10 Hardening & go-live | ⬜ | Needs ≥ 8 weeks of pilot data |
