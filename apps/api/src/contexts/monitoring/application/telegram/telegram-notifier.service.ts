@@ -4,6 +4,9 @@ import { ConfigService } from '../../../../platform/config/config.service';
 import { QueueService } from '../../../../platform/queues/queue.service';
 import { ITelegramClient, TELEGRAM_CLIENT } from './telegram.client';
 
+export const TELEGRAM_ATTEMPTS = 10;
+export const TELEGRAM_BACKOFF_MS = 5_000;
+
 export interface TelegramNotificationJob {
   action: 'raise' | 'resolve';
   alertId: string;
@@ -37,11 +40,13 @@ export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
+    // Telegram (or the site's internet) can be down for minutes; 5 tries at 1 s gave up after ~17 s and lost a
+    // critical alert in the pilot. 10 tries at 5 s exponential = retries for ~40 min.
     this.queue = this.queueService.getQueue('notify.telegram', {
-      attempts: 5,
+      attempts: TELEGRAM_ATTEMPTS,
       backoff: {
         type: 'exponential',
-        delay: 1000,
+        delay: TELEGRAM_BACKOFF_MS,
       },
       removeOnComplete: { count: 100 },
       removeOnFail: { count: 500 },
@@ -83,8 +88,12 @@ export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async enqueue(job: TelegramNotificationJob): Promise<void> {
-    const jobId = `${job.alertId}__${job.action}`;
+  /**
+   * @param eventId id of the outbox event behind this notification. Part of the BullMQ job id so a redelivered
+   *   event is sent once, while a reopened alert (same alertId, new event) is sent again.
+   */
+  async enqueue(job: TelegramNotificationJob, eventId: string): Promise<void> {
+    const jobId = `${job.alertId}__${job.action}__${eventId}`;
     await (this.queue as Queue<any>).add('notify', job, { jobId });
   }
 

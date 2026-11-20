@@ -174,7 +174,7 @@ export class MonitoringOutboxHandlers implements OnModuleInit {
       message: event.data.message,
       machineId: event.data.machineId,
       count: event.data.count,
-    });
+    }, event.eventId);
   }
 
   async handleAlertResolved(event: DomainEvent<AlertResolvedPayload>): Promise<void> {
@@ -185,7 +185,7 @@ export class MonitoringOutboxHandlers implements OnModuleInit {
       severity: event.data.severity,
       message: event.data.message,
       machineId: event.data.machineId,
-    });
+    }, event.eventId);
   }
 
   async handlePaymentPaid(

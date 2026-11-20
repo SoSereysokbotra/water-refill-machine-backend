@@ -230,20 +230,39 @@ describe('Phase 5 Acceptance (E2E)', () => {
     expect(fakeTelegram.messages.some((m) => m.toLowerCase().includes('resolved'))).toBe(true);
   });
 
-  // 3. 10-minute merge
-  it('Scenario 3: 10-minute merge', async () => {
+  // 3. 10-minute merge: offline again soon after resolving reopens the SAME alert and notifies again
+  //    (merging silently into the resolved alert left an offline machine with a closed alert and no message)
+  it('Scenario 3: 10-minute merge reopens the alert and notifies again', async () => {
     fakeTelegram.clear();
+    const before = await prisma.alert.findFirst({ where: { machineId: MACHINE_ID, type: 'MACHINE_OFFLINE' } });
+    expect(before!.status).toBe('resolved');
 
     // Going offline again within 10 min of resolving
     await fleetConsumer.onOnline(`wrm/${MACHINE_ID}/online`, Buffer.from('0'));
     await dispatchOutbox(MACHINE_ID);
+    await waitForTelegramMessages(1);
 
     const alerts = await prisma.alert.findMany({
       where: { machineId: MACHINE_ID, type: 'MACHINE_OFFLINE' },
     });
-    // Still no new row (merged into existing)
+    // Still no new row (merged into existing), but it is open again
     expect(alerts).toHaveLength(1);
-    expect(fakeTelegram.messages).toHaveLength(0);
+    expect(alerts[0]!.status).toBe('active');
+    expect(alerts[0]!.resolvedAt).toBeNull();
+    expect(alerts[0]!.count).toBe(before!.count + 1);
+    expect(fakeTelegram.messages).toHaveLength(1);
+    expect(fakeTelegram.messages[0]).toContain('CRITICAL');
+    expect(fakeTelegram.messages[0]).toContain(`count: ${before!.count + 1}`);
+
+    // Back online again -> resolved again, with a new RESOLVED message
+    fakeTelegram.clear();
+    await fleetConsumer.onOnline(`wrm/${MACHINE_ID}/online`, Buffer.from('1'));
+    await dispatchOutbox(MACHINE_ID);
+    await waitForTelegramMessages(1);
+
+    const after = await prisma.alert.findFirst({ where: { id: alerts[0]!.id } });
+    expect(after!.status).toBe('resolved');
+    expect(fakeTelegram.messages.some((m) => m.includes('RESOLVED'))).toBe(true);
   });
 
   // 4. Unknown dispense

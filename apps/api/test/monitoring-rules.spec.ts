@@ -375,3 +375,44 @@ describe('Monitoring Rules & Deduplication', () => {
   });
 });
 
+
+describe('Telegram notifier job ids', () => {
+  const job = {
+    action: 'raise' as const,
+    alertId: 'alt-1',
+    type: 'MACHINE_OFFLINE',
+    severity: 'critical',
+    message: 'Machine is offline',
+    machineId: 'WRM-001',
+    count: 1,
+  };
+
+  it('same event twice -> same job id (sent once); reopened alert (new event) -> new job id (sent again)', async () => {
+    const service = new TelegramNotifierService({} as any, {} as any, {} as any);
+    const jobIds: string[] = [];
+    (service as any).queue = { add: async (_name: string, _data: unknown, opts: { jobId: string }) => jobIds.push(opts.jobId) };
+
+    await service.enqueue(job, 'evt-1');
+    await service.enqueue(job, 'evt-1'); // outbox redelivery of the same event
+    await service.enqueue({ ...job, count: 2 }, 'evt-2'); // same alert reopened
+
+    expect(jobIds[0]).toBe(jobIds[1]);
+    expect(jobIds[2]).not.toBe(jobIds[0]);
+    for (const id of jobIds) expect(id).not.toContain(':'); // BullMQ rejects ':' in custom job ids
+  });
+});
+
+describe('Telegram notifier retries', () => {
+  it('keeps retrying a failed message for at least 30 minutes (short outages must not lose alerts)', () => {
+    let opts: { attempts: number; backoff: { type: string; delay: number } } | undefined;
+    const queueService = { getQueue: (_name: string, o: typeof opts) => { opts = o; return {}; } };
+    const config = { get: (k: string) => (k === 'RUN_MODE' ? 'api' : undefined) };
+    new TelegramNotifierService(queueService as any, {} as any, config as any).onModuleInit();
+
+    expect(opts!.backoff.type).toBe('exponential');
+    // BullMQ exponential backoff: delay * 2^(n-1) before retry n
+    let totalMs = 0;
+    for (let n = 1; n < opts!.attempts; n++) totalMs += opts!.backoff.delay * 2 ** (n - 1);
+    expect(totalMs).toBeGreaterThanOrEqual(30 * 60 * 1000);
+  });
+});

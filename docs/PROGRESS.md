@@ -9,9 +9,9 @@
 
 | | |
 |---|---|
-| **Current phase** | **Phase 3.5: Early pilot 🟦** (laptop pilot running; ESP32 payment check passed 2026-11-17; weekly log open). Phase 3 needs STM32-reboot + 2 h offline check; Phase 5 needs the Telegram unplug check |
+| **Current phase** | **Phase 3.5: Early pilot 🟦** (laptop pilot running; ESP32 payment check passed 2026-11-17; weekly log open). Phase 3 needs STM32-reboot + 2 h offline check |
 | **Next action** | Keep the pilot running; weekly pilot notes. Parallel: Telegram check, ABA questions, STM32 UART |
-| **Last updated** | 2026-11-17 by Claude |
+| **Last updated** | 2026-11-20 by Claude |
 | **Last commit** | `15c0467` (merge of `feat/phase-3.5-pilot`) |
 
 ### Before Phase 0 (prototype, already working)
@@ -34,7 +34,7 @@ Status values: ⬜ Not started · 🟦 In progress · 🟨 Blocked / waiting · 
 | 3 | Dispensing & refund review | 🟦 | Backend developer | 2026-11-10 | | `phase3` |
 | 3.5 | Early pilot | 🟦 | Claude (files) + backend developer (runs on own PC) | 2026-11-17 | | `feat/phase-3.5-laptop-pilot` |
 | 4 | Fleet | ✅ | Claude (for backend developer) | 2026-11-12 | 2026-11-12 | `feat/phase-4-fleet` |
-| 5 | Monitoring | 🟦 | Claude (for backend developer) | 2026-11-12 | 2026-11-13 | `75fa502` |
+| 5 | Monitoring | ✅ | Claude (for backend developer) | 2026-11-12 | 2026-11-20 | `fix/alert-reopen` |
 | 6 | Identity | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `dc03412` |
 | 7 | Reporting & dashboard | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `9169499` |
 | 8 | Observability | ✅ | AI Assistant (Antigravity) | 2026-11-14 | 2026-11-14 | `ba06663` |
@@ -75,9 +75,9 @@ Copy the DoD of the current phase from the plan here and tick items as they are 
 - [x] Every sensitive action audit-logged
 - [x] `PROGRESS.md` updated with handoff note
 
-### Phase 5: Monitoring (code & automated tests complete)
+### Phase 5: Monitoring (done)
 - [x] One alert per incident for every rule
-- [ ] `[MANUAL CHECK]` Critical alerts reach Telegram (unplug-ESP32 test, see `readmePhase5.md` §4)
+- [x] `[MANUAL CHECK]` Critical alerts reach Telegram (unplug-ESP32 test, see `readmePhase5.md` §4) — 2026-11-20 on the laptop pilot, real ESP32: CRITICAL + RESOLVED, and reopen within 10 min (count 2)
 - [x] `PROGRESS.md` updated with handoff note
 
 ### Phase 4: Fleet (done)
@@ -182,6 +182,26 @@ Add a new note at the top at the end of every session.
 **Needs from a person**
 - … / None
 ```
+
+---
+
+### 2026-11-20: Phase 5 done — Telegram alerts on the pilot + 2 alert fixes (Claude) — on `fix/alert-reopen`
+
+**Done this session**
+- Telegram bot `@WaterRefilMachinebot` connected to the laptop pilot (`TELEGRAM_*` in `infra/pilot/.env`; the chat ID first entered was wrong, replaced with the one from the user's /start).
+- ESP32 Wi-Fi moved to the user's phone hotspot (2.4 GHz; old network out of range, PC network was 5 GHz only). Re-flashed v0.5.1 with the new `secrets.h`.
+- **Fix 1 — offline again within 10 min was silent**: `raiseAlert` merged into the *resolved* alert (count + 1) and left it resolved → machine offline, no open alert, no message. Now a recently resolved alert is **reopened** (same row, count + 1, status active) and `AlertRaised` is emitted again. Telegram job id now includes the outbox `eventId` (a reopened alert's message is no longer dropped as a duplicate; redelivery of the same event still sends once). Phase 5 acceptance Scenario 3 updated (it asserted the silent behaviour).
+- **Fix 2 — a short Telegram outage lost a critical alert**: 5 attempts at 1 s gave up after ~17 s (Telegram answered 502/504 for a few minutes). Now 10 attempts at 5 s exponential (~40 min) and a 15 s timeout per request (a request hung for 2 min before).
+- `[MANUAL CHECK]` passed on the real ESP32: unplug → CRITICAL, plug → RESOLVED, unplug again within 10 min → CRITICAL (count 2) → RESOLVED. 6/6 Telegram jobs completed.
+- Full suite 36 files / 249 tests green.
+
+**Not finished / next steps**
+1. Merge `fix/alert-reopen` (pilot already runs it).
+2. Phase 3.5 weekly pilot log; Phase 9 prep on the PC.
+
+**Known issues**
+- The laptop pilot and the ESP32 both use the phone hotspot; short internet drops seen (MQTT reconnect at 15:44). A fixed connection for the laptop is better.
+- `CONFIG_REJECTED` warning stays open until the STM32 answers `CFG,OK`.
 
 ---
 

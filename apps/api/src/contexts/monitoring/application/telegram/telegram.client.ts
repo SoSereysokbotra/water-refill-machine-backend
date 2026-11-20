@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '../../../../platform/config/config.service';
 
 export const TELEGRAM_CLIENT = 'TelegramClient';
+export const TELEGRAM_TIMEOUT_MS = 15_000;
 
 export interface ITelegramClient {
   sendMessage(text: string): Promise<void>;
@@ -38,6 +39,8 @@ export class TelegramClient implements ITelegramClient {
       chatIds.map(async (id) => {
         const res = await fetch(url, {
           method: 'POST',
+          // without a limit one hanging request blocked a worker slot for minutes; the queue retries instead
+          signal: AbortSignal.timeout(TELEGRAM_TIMEOUT_MS),
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: id,
