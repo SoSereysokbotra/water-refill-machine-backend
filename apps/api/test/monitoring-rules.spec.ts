@@ -375,3 +375,29 @@ describe('Monitoring Rules & Deduplication', () => {
   });
 });
 
+
+describe('Telegram notifier job ids', () => {
+  const job = {
+    action: 'raise' as const,
+    alertId: 'alt-1',
+    type: 'MACHINE_OFFLINE',
+    severity: 'critical',
+    message: 'Machine is offline',
+    machineId: 'WRM-001',
+    count: 1,
+  };
+
+  it('same event twice -> same job id (sent once); reopened alert (new event) -> new job id (sent again)', async () => {
+    const service = new TelegramNotifierService({} as any, {} as any, {} as any);
+    const jobIds: string[] = [];
+    (service as any).queue = { add: async (_name: string, _data: unknown, opts: { jobId: string }) => jobIds.push(opts.jobId) };
+
+    await service.enqueue(job, 'evt-1');
+    await service.enqueue(job, 'evt-1'); // outbox redelivery of the same event
+    await service.enqueue({ ...job, count: 2 }, 'evt-2'); // same alert reopened
+
+    expect(jobIds[0]).toBe(jobIds[1]);
+    expect(jobIds[2]).not.toBe(jobIds[0]);
+    for (const id of jobIds) expect(id).not.toContain(':'); // BullMQ rejects ':' in custom job ids
+  });
+});

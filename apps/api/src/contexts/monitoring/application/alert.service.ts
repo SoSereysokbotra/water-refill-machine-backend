@@ -37,8 +37,11 @@ export class AlertService {
 
   /**
    * Raises an alert within a transaction.
-   * If an active/acknowledged alert with the same dedupeKey exists, or one was resolved < 10 min ago,
-   * merges by incrementing count and updating lastSeenAt without creating a new alert or emitting AlertRaised.
+   * - Active/acknowledged alert with the same dedupeKey: merge (count + 1, lastSeenAt), no new notification.
+   * - Alert resolved < 10 min ago: the problem is back, so the SAME alert is reopened (count + 1, status active)
+   *   and AlertRaised is emitted again. Merging silently into a resolved alert would leave e.g. an offline
+   *   machine with a closed alert and nobody told.
+   * - Otherwise: a new alert + AlertRaised.
    */
   async raiseAlert(tx: PrismaTransaction, def: AlertDefinition): Promise<Alert> {
     const now = this.clock.now();
@@ -57,14 +60,33 @@ export class AlertService {
     });
 
     if (existing && shouldMergeAlert(existing, now)) {
-      this.logger.log(`Merging alert for dedupeKey [${def.dedupeKey}] (existing alert ${existing.id}, count ${existing.count + 1})`);
-      return tx.alert.update({
+      if (existing.status !== 'resolved') {
+        this.logger.log(`Merging alert for dedupeKey [${def.dedupeKey}] (existing alert ${existing.id}, count ${existing.count + 1})`);
+        return tx.alert.update({
+          where: { id: existing.id },
+          data: {
+            count: { increment: 1 },
+            lastSeenAt: now,
+          },
+        });
+      }
+
+      const reopened = await tx.alert.update({
         where: { id: existing.id },
         data: {
+          status: 'active',
+          resolvedAt: null,
+          resolvedBy: null,
+          acknowledgedAt: null,
+          acknowledgedBy: null,
+          message: def.message,
           count: { increment: 1 },
           lastSeenAt: now,
         },
       });
+      await this.emitRaised(tx, reopened, now);
+      this.logger.warn(`Alert reopened: [${reopened.severity}] ${reopened.type} (${reopened.id}) on ${reopened.machineId ?? 'system'}, count ${reopened.count}`);
+      return reopened;
     }
 
     const created = await tx.alert.create({
@@ -81,28 +103,31 @@ export class AlertService {
       },
     });
 
+    await this.emitRaised(tx, created, now);
+    this.logger.warn(`Alert raised: [${created.severity}] ${created.type} (${created.id}) on ${created.machineId ?? 'system'}`);
+    return created;
+  }
+
+  private async emitRaised(tx: PrismaTransaction, alert: Alert, now: Date): Promise<void> {
     await this.outbox.add(
       [
         createDomainEvent<AlertRaisedPayload>(
           'monitoring.AlertRaised',
           {
-            alertId: created.id,
-            type: created.type,
-            severity: created.severity,
-            message: created.message,
-            machineId: created.machineId,
-            count: created.count,
+            alertId: alert.id,
+            type: alert.type,
+            severity: alert.severity,
+            message: alert.message,
+            machineId: alert.machineId,
+            count: alert.count,
           },
           { occurredAt: now },
         ),
       ],
       tx,
       'Alert',
-      created.id,
+      alert.id,
     );
-
-    this.logger.warn(`Alert raised: [${created.severity}] ${created.type} (${created.id}) on ${created.machineId ?? 'system'}`);
-    return created;
   }
 
   /**

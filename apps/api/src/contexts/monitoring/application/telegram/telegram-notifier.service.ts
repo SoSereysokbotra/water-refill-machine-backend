@@ -83,8 +83,12 @@ export class TelegramNotifierService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async enqueue(job: TelegramNotificationJob): Promise<void> {
-    const jobId = `${job.alertId}__${job.action}`;
+  /**
+   * @param eventId id of the outbox event behind this notification. Part of the BullMQ job id so a redelivered
+   *   event is sent once, while a reopened alert (same alertId, new event) is sent again.
+   */
+  async enqueue(job: TelegramNotificationJob, eventId: string): Promise<void> {
+    const jobId = `${job.alertId}__${job.action}__${eventId}`;
     await (this.queue as Queue<any>).add('notify', job, { jobId });
   }
 
